@@ -1,0 +1,180 @@
+#!/usr/bin/env sh
+
+usage() {
+  cat << EOF
+Формирует Полный Снимок проекта в соответствии с протоколом DDS.
+
+Использование: $(basename "$0") [--help] [--output <файл>] [--request <текст|файл>] [--all] [путь ...]
+
+Опции:
+  --help            Показать справку.
+  --output <файл>   Сохранить вывод в файл вместо stdout.
+  --request <...>   Добавить Запрос Действия.
+  --all             Включать скрытые файлы.
+EOF
+}
+
+fail() {
+  printf "ERROR: %s\n" "$1" >&2
+  exit 1
+}
+
+# --- Configuration & Dependencies ---
+script_dir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
+DDS_LINTER="$script_dir/dds-linter"
+DDS_LIST="$script_dir/dds-list"
+DDS_TREE="$script_dir/dds-tree"
+
+for tool in "$DDS_LINTER" "$DDS_LIST" "$DDS_TREE"; do
+  if ! [ -x "$tool" ]; then fail "Зависимость не найдена или не исполняема: $tool"; fi
+done
+
+output_file=""
+request_content=""
+show_all=""
+path_args=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help) usage; exit 0 ;;
+    --output)
+      [ -z "$2" ] && fail "--output требует аргумент"
+      output_file="$2"
+      shift 2
+      ;;
+    --request)
+      [ -z "$2" ] && fail "--request требует аргумент"
+      req_arg="$2"
+      if [ -f "$req_arg" ]; then
+        request_content=$(cat "$req_arg")
+      else
+        request_content="$req_arg"
+      fi
+      shift 2
+      ;;
+    --all)
+      show_all="--all"
+      shift
+      ;;
+    -*) fail "Неизвестная опция '$1'" ;;
+    *)  path_args="$path_args \"$1\""; shift ;;
+  esac
+done
+
+if [ -z "$path_args" ]; then
+  set -- "."
+else
+  eval set -- "$path_args"
+fi
+
+tmp_dir="${TMPDIR:-/tmp}"
+tmp_linter="$tmp_dir/dds_snap_lint_$$"
+tmp_list="$tmp_dir/dds_snap_list_$$"
+tmp_tree="$tmp_dir/dds_snap_tree_$$"
+
+cleanup() {
+  rm -f "$tmp_linter" "$tmp_list" "$tmp_tree"
+}
+trap cleanup EXIT
+
+# --- Step 1: Linter ---
+if ! "$DDS_LINTER" "$@" > "$tmp_linter"; then
+  cat "$tmp_linter" >&2
+  fail "Проверка линтера не пройдена."
+fi
+
+# --- Step 2: Data Collection ---
+"$DDS_TREE" $show_all "$@" > "$tmp_tree"
+"$DDS_LIST" $show_all "$@" > "$tmp_list"
+
+if [ ! -s "$tmp_list" ]; then
+  fail "Список файлов пуст."
+fi
+
+# --- Step 3: Generation ---
+
+generate_stream() {
+  manifest_processed=false
+  
+  # Используем дескриптор 3 для чтения списка
+  while IFS= read -r line <&3; do
+    # Парсинг формата: TYPE [PROTECTED]: PATH
+    
+    # Отделяем метаданные (все до ": ")
+    meta="${line%%: *}"
+    # Отделяем путь (все после ": ")
+    path="${line#*: }"
+    
+    # Получаем тип (первое слово в meta)
+    type="${meta%% *}"
+    
+    # Проверяем наличие флага PROTECTED
+    is_protected=0
+    if echo "$meta" | grep -q "PROTECTED"; then
+      is_protected=1
+    fi
+
+    # Определяем имя контекста для заголовка
+    ctx_name="$type"
+    if [ "$type" = "CONTENT" ]; then
+      ctx_name="CONTENT OF"
+    fi
+
+    # --- MANIFEST BLOCK ---
+    if [ "$type" = "MANIFEST" ]; then
+      header="--- DDS-CONTEXT ${ctx_name}: "
+      if [ "$is_protected" -eq 1 ]; then header="${header}PROTECTED: "; fi
+      header="${header}${path} ---"
+      
+      printf '%s\n' "$header"
+      if [ -f "$path" ]; then cat "$path"; else printf "[File Not Found]\n"; fi
+      printf '\n'
+
+      # Inject Static Contexts
+      printf '--- DDS-CONTEXT PROJECT STRUCTURE ---\n'
+      cat "$tmp_tree"
+      printf '\n'
+
+      printf '--- DDS-CONTEXT SNAPSHOT LIST ---\n'
+      # Выводим содержимое dds-list как есть, так как оно теперь очень информативно
+      cat "$tmp_list"
+      printf '\n'
+
+      printf '--- DDS-CONTEXT LINTER REPORT ---\n'
+      cat "$tmp_linter"
+      printf '\n'
+
+      manifest_processed=true
+      continue
+    fi
+
+    # --- OTHER BLOCKS ---
+    if [ "$manifest_processed" = "false" ]; then
+      fail "CRITICAL ERROR: Манифест не найден в начале списка. Проверьте 'dds/specs/__*.spec.md'."
+    fi
+
+    header="--- DDS-CONTEXT ${ctx_name}: "
+    if [ "$is_protected" -eq 1 ]; then header="${header}PROTECTED: "; fi
+    header="${header}${path} ---"
+
+    printf '%s\n' "$header"
+    if [ -f "$path" ]; then cat "$path"; else printf "[File Not Found]\n"; fi
+    printf '\n'
+
+  done 3< "$tmp_list"
+
+  # Request Block
+  if [ -n "$request_content" ]; then
+    printf '--- DDS-CONTEXT REQUEST ---\n'
+    printf '%s\n' "$request_content"
+    printf '\n'
+  fi
+
+  printf '--- DDS-CONTEXT END OF SNAPSHOT ---\n'
+}
+
+if [ -n "$output_file" ]; then
+  generate_stream > "$output_file"
+else
+  generate_stream
+fi

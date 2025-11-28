@@ -1,0 +1,83 @@
+#!/usr/bin/env sh
+
+# Не проверялось!
+
+usage() {
+  cat << EOF
+Безопасно выполняет полный DDS-цикл (snapshot | llm | apply).
+
+Использование: $(basename "$0") [ОПЦИИ_SNAPSHOT] -- <КОМАНДА_LLM>
+
+ОПИСАНИЕ:
+  Автоматизирует конвейер:
+  1. dds-snapshot с опциями.
+  2. Вывод (Снимок) передается в <КОМАНДА_LLM>.
+  3. Вывод <КОМАНДА_LLM> (План) передается в dds-apply.
+
+  Разделитель '--' обязателен.
+
+ОПЦИИ_SNAPSHOT:
+  Валидные опции для dds-snapshot, кроме --output (не поддерживается, т.к. вывод в pipe).
+  Примеры: --request "запрос", пути.
+
+<КОМАНДА_LLM>:
+  Команда для LLM-исполнителя с аргументами.
+
+Примеры:
+  $(basename "$0") -- ./my_llm_cli
+
+  $(basename "$0") --request "Реализуй метод" src/ -- ./my_llm_cli --model gpt-4o
+
+  --help      Показать это сообщение и выйти.
+EOF
+}
+
+set -o pipefail
+
+script_dir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
+DDS_SNAPSHOT="$script_dir/dds-snapshot"
+DDS_APPLY="$script_dir/dds-apply"
+
+if ! [ -x "$DDS_SNAPSHOT" ]; then printf "ERROR: %s не найден или не исполняем.\n" "$DDS_SNAPSHOT" >&2; exit 1; fi
+if ! [ -x "$DDS_APPLY" ]; then printf "ERROR: %s не найден или не исполняем.\n" "$DDS_APPLY" >&2; exit 1; fi
+
+snapshot_args=""
+separator_found=false
+
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--" ]; then
+    separator_found=true
+    shift
+    llm_command="$@"
+    break
+  fi
+
+  if [ "$1" = "--help" ]; then
+    usage
+    exit 0
+  fi
+
+  if [ "$1" = "--output" ]; then
+    printf "ERROR: Опция --output не поддерживается в dds-run (вывод идет в pipe).\n" >&2
+    exit 1
+  fi
+
+  snapshot_args="$snapshot_args \"$1\""
+  shift
+done
+
+if [ "$separator_found" = "false" ] || [ -z "$llm_command" ]; then
+  printf "ERROR: Разделитель '--' и команда LLM обязательны.\n\n" >&2
+  usage >&2
+  exit 1
+fi
+
+eval "$DDS_SNAPSHOT $snapshot_args" | eval "$llm_command" | "$DDS_APPLY"
+exit_code=$?
+
+if [ "$exit_code" -ne 0 ]; then
+  printf "\nERROR: Цикл завершился с ошибкой (код %s).\n" "$exit_code" >&2
+  exit "$exit_code"
+else
+  printf "\nINFO: Цикл успешно завершен.\n" >&2
+fi

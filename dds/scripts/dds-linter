@@ -1,0 +1,200 @@
+#!/usr/bin/env sh
+
+# DDS INTEGRITY LINTER
+#
+# Назначение:
+#   Обеспечивает валидацию структуры проекта и соблюдение протокола DDS перед выполнением операций.
+#   Предотвращает создание некорректных Снимков и выявляет логические конфликты.
+#
+# Архитектурные принципы:
+#   1. Dual-View Validation: Сравнивает "физическое" состояние диска (find) с "логическим"
+#      состоянием DDS-контекста (dds-list). Расхождения указывают на проблемы.
+#   2. Static Checks: Проверяет инварианты файловой системы:
+#      - Наличие обязательных директорий (dds/specs).
+#      - Уникальность Манифеста.
+#      - Отсутствие "блуждающих" спецификаций (Misplaced Specs).
+#   3. Logic Checks: Проверяет правила методологии:
+#      - Shadowed Specs (WARN): Спецификации, скрытые правилами .ddsignore.
+#      - Protection Conflicts (ERROR): Спецификации, пытающиеся управлять защищенными артефактами.
+
+
+usage() {
+  cat << EOF
+Проверяет структуру проекта и целостность спецификаций DDS.
+
+Использование: $(basename "$0") [--help] [директория]
+
+Проверки:
+  1. Структура: Наличие 'dds/specs', Манифеста, отсутствие мусора.
+  2. Логика (WARN): Спецификации, скрытые правилами .ddsignore.
+  3. Безопасность (ERROR): Спецификации, управляющие защищенными файлами.
+
+Опции:
+  --help        Показать справку.
+
+Аргументы:
+  [директория]  Корень проекта (по умолчанию: текущая).
+EOF
+}
+
+fail() {
+  printf "CRITICAL ERROR: %s\n" "$1" >&2
+  exit 2
+}
+
+# --- Configuration ---
+target_dir="."
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help) usage; exit 0 ;;
+    -*) fail "Неизвестная опция '$1'" ;;
+    *) target_dir="$1"; shift ;;
+  esac
+done
+
+if [ ! -d "$target_dir" ]; then fail "Директория '$target_dir' не найдена."; fi
+
+# --- Dependencies ---
+script_dir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
+DDS_LIST="$script_dir/dds-list"
+
+if ! [ -x "$DDS_LIST" ]; then fail "Зависимость '$DDS_LIST' не найдена."; fi
+
+# --- Phase 1: Static Checks (File System) ---
+
+specs_dir="${target_dir%/}/dds/specs"
+err_count=0
+warn_count=0
+
+# 1.1 Check Directories
+if [ ! -d "$specs_dir" ]; then
+  printf "ERROR: Директория 'dds/specs' отсутствует.\n"
+  exit 1
+fi
+
+# 1.2 Check Manifest
+manifest_cnt=$(find "$specs_dir" -maxdepth 1 -name "__*.spec.*" 2>/dev/null | wc -l)
+if [ "$manifest_cnt" -eq 0 ]; then
+  printf "ERROR: Манифест (__*.spec.*) не найден в 'dds/specs'.\n"
+  err_count=$((err_count + 1))
+elif [ "$manifest_cnt" -gt 1 ]; then
+  printf "ERROR: Найдено несколько файлов Манифеста (должен быть один).\n"
+  err_count=$((err_count + 1))
+fi
+
+# 1.3 Check Misplaced Specs
+misplaced=$(find "$target_dir" -path "$specs_dir" -prune -o -name "*.spec.*" -print)
+if [ -n "$misplaced" ]; then
+  printf "ERROR: Спецификации вне 'dds/specs':\n"
+  printf "%s\n" "$misplaced" | sed 's/^/  - /'
+  err_count=$((err_count + 1))
+fi
+
+# 1.4 Check Clutter (Non-specs inside dds/specs)
+clutter=$(find "$specs_dir" -type f ! -name "*.spec.*" -print)
+if [ -n "$clutter" ]; then
+  printf "WARN: Посторонние файлы в 'dds/specs' (игнорируются):\n"
+  printf "%s\n" "$clutter" | sed 's/^/  - /'
+  warn_count=$((warn_count + 1))
+fi
+
+# --- Phase 2: Logic Checks (DDS-LIST vs DISK) ---
+
+tmp_dir="${TMPDIR:-/tmp}"
+tmp_snap="$tmp_dir/dds_lint_snap_$$"
+tmp_disk="$tmp_dir/dds_lint_disk_$$"
+trap 'rm -f "$tmp_snap" "$tmp_disk"' EXIT
+
+# Генерируем два "взгляда" на проект
+"$DDS_LIST" --all "$target_dir" > "$tmp_snap"
+find "$specs_dir" -name "*.spec.*" > "$tmp_disk"
+
+awk -v root="$target_dir" '
+  BEGIN { err = 0; warn = 0 }
+  
+  # Функция очистки путей от ./ и root префикса
+  function clean(p) {
+    sub(/^\.\//, "", p)
+    sub(/\/$/, "", p)
+    
+    # Если root передан (не .), убираем его из путей find
+    norm_root = root
+    sub(/^\.\//, "", norm_root)
+    sub(/\/$/, "", norm_root)
+    
+    if (norm_root != "" && norm_root != "." && index(p, norm_root) == 1) {
+       # +2 чтобы убрать слеш после root
+       p = substr(p, length(norm_root) + 2)
+    }
+    return p
+  }
+
+  # --- Reading Snapshot (File 1) ---
+  NR == FNR {
+    # Format: TYPE [FLAGS]: PATH
+    # Находим разделитель ": "
+    idx = index($0, ": ")
+    if (idx == 0) next
+    
+    meta = substr($0, 1, idx - 1)
+    path = substr($0, idx + 2)
+    path = clean(path)
+    
+    in_snapshot[path] = 1
+    
+    # Проверяем флаг PROTECTED в мета-части
+    if (index(meta, "PROTECTED") > 0) {
+      protected_files[path] = 1
+    }
+    next
+  }
+
+  # --- Reading Disk Specs (File 2) ---
+  {
+    spec_path = clean($0)
+    
+    # Check 2.1: Ignored Specs
+    # Если файл есть на диске, но dds-list его не видит -> он в .ddsignore
+    if (!(spec_path in in_snapshot)) {
+      print "WARN: Спецификация скрыта правилами (.ddsignore): " spec_path
+      warn++
+    }
+
+    # Check 2.2: Protection Conflict
+    # Логика: spec "dds/specs/src/foo.ts.spec.md" управляет "src/foo.ts"
+    # Вычисляем путь артефакта
+    artifact = spec_path
+    sub(/^dds\/specs\//, "", artifact)
+    sub(/\.spec\.[^.]*$/, "", artifact)
+    
+    if (artifact in protected_files) {
+      print "ERROR: Спецификация конфликтует с защищенным файлом: " spec_path " -> " artifact
+      err++
+    }
+  }
+
+  END {
+    if (err > 0) exit 1
+    if (warn > 0) exit 2
+    exit 0
+  }
+' "$tmp_snap" "$tmp_disk"
+
+awk_res=$?
+
+if [ "$awk_res" -eq 1 ]; then
+  err_count=$((err_count + 1))
+elif [ "$awk_res" -eq 2 ]; then
+  warn_count=$((warn_count + 1))
+fi
+
+# --- Report ---
+
+printf "\nРезультат: Ошибок: %d, Предупреждений: %d\n" "$err_count" "$warn_count"
+
+if [ "$err_count" -gt 0 ]; then
+  exit 1
+else
+  exit 0
+fi
