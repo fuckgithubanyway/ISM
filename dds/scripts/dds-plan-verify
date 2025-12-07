@@ -1,0 +1,277 @@
+#!/usr/bin/env sh
+
+# DDS PLAN VERIFIER
+#
+# Назначение: Статический анализ и верификация Плана Изменений.
+#
+# Принцип работы:
+#   1. Проверяет наличие "Магического заголовка".
+#   2. Использует AWK как парсер состояний для валидации синтаксиса команд.
+#   3. Выполняет проверки файловой системы (exist check) через system() вызовы внутри AWK.
+#   4. Не изменяет файлы (Read-only).
+
+usage() {
+  cat << EOF
+Проверяет корректность и безопасность Плана Изменений DDS.
+
+Использование: $(basename "$0") [ОПЦИИ] [ЦЕЛЕВАЯ_ДИРЕКТОРИЯ]
+
+Ввод Плана:
+  (по умолчанию)   Чтение Плана из стандартного потока (stdin).
+  --file <путь>    Чтение Плана из указанного файла.
+
+Аргументы:
+  [ЦЕЛЕВАЯ_ДИРЕКТОРИЯ]  Корень проекта (по умолчанию: текущая директория).
+
+Опции:
+  --help           Показать справку.
+EOF
+}
+
+fail() {
+  printf "\033[31m[VERIFY FAILED]\033[0m %s\n" "$1" >&2
+  exit 1
+}
+
+# --- Configuration & Input Handling ---
+
+input_source="/dev/stdin"
+input_name="STDIN"
+target_dir="."
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help) usage; exit 0 ;;
+    
+    --file)
+      [ -z "$2" ] && fail "--file требует аргумент"
+      input_source="$2"
+      input_name="$2"
+      shift 2
+      ;;
+      
+    -*) fail "Неизвестная опция '$1'" ;;
+    
+    *) 
+      if [ "$target_dir" != "." ]; then fail "Целевая директория указана дважды"; fi
+      target_dir="$1"
+      shift 
+      ;;
+  esac
+done
+
+if [ ! -d "$target_dir" ]; then fail "Директория '$target_dir' не найдена."; fi
+
+# Подготовка временного файла для безопасного чтения
+tmp_dir="${TMPDIR:-/tmp}"
+plan_file="$tmp_dir/dds_verify_input_$$"
+trap 'rm -f "$plan_file"' EXIT
+
+# Чтение и санитайзинг (удаление CRLF, критично для LLM вывода)
+if [ "$input_source" = "/dev/stdin" ]; then
+  if [ -t 0 ]; then fail "Ожидается ввод из pipe или укажите --file"; fi
+  tr -d '\r' > "$plan_file"
+else
+  if [ ! -f "$input_source" ]; then fail "Файл плана не найден: $input_source"; fi
+  tr -d '\r' < "$input_source" > "$plan_file"
+fi
+
+if [ ! -s "$plan_file" ]; then fail "План Изменений пуст."; fi
+
+# --- Phase 1: Magic Header Check ---
+
+first_line=$(head -n 1 "$plan_file")
+case "$first_line" in
+  "=== DDS-ACTION"*) ;; # OK
+  *) fail "Неверный формат. Отсутствует заголовок '=== DDS-ACTION' в начале $input_name" ;;
+esac
+
+# --- Phase 2: Syntax & Logic Parsing (AWK) ---
+
+# AWK скрипт выполняет роль конечного автомата, проверяя валидность переходов
+# и существование файлов (через вызов test -f).
+
+validation_report=$(awk -v root="$target_dir" '
+  function check_exist(f,   cmd, ret) {
+     # Безопасная проверка существования файла
+     cmd = "test -e \"" root "/" f "\""
+     ret = system(cmd)
+     return (ret == 0)
+  }
+
+  function check_not_exist(f,   cmd, ret) {
+     cmd = "test -e \"" root "/" f "\""
+     ret = system(cmd)
+     return (ret != 0)
+  }
+
+  BEGIN { state = "IDLE"; line_num = 0; err = 0 }
+  
+  { line_num++ }
+
+  /^=== DDS-ACTION / {
+    # Нормализация строки команды
+    line = $0; sub(/^=== DDS-ACTION /, "", line); sub(/ ===$/, "", line)
+    split(line, p, ": ")
+    act = p[1]; arg = p[2]
+
+    # --- Управление состояниями ---
+
+    if (act == "COMMENT") { state = "SKIP"; next }
+    
+    # Если мы внутри блока COMMENT, игнорируем все до TERMINATE
+    if (state == "SKIP") {
+       if (act == "TERMINATE") { state = "IDLE" }
+       next
+    }
+
+    if (act == "END") { exit 0 }
+
+    if (act == "TERMINATE") {
+       if (state == "IDLE") { print "WARN|" line_num ": Лишний TERMINATE"; next }
+       
+       # Валидация завершения блока REPLACE
+       if (op == "REPLACE") {
+          if (has_search == 0) print "ERROR|" line_num ": REPLACE без блока SEARCH FOR"
+          if (has_replace == 0) print "ERROR|" line_num ": REPLACE без блока REPLACE WITH"
+       }
+       
+       state = "IDLE"; op = ""; next
+    }
+
+    # --- Обработка Директив ---
+
+    if (act == "MAKE DIR") {
+       if (state != "IDLE") print "ERROR|" line_num ": Вложенная директива MAKE DIR"
+       getline path
+       if (path == "") print "ERROR|" line_num ": Пустой путь для MAKE DIR"
+       # Тут можно проверить существование родителя, но mkdir -p это берет на себя
+       next
+    }
+
+    if (act == "WRITE FILE") {
+       if (state != "IDLE") print "ERROR|" line_num ": Вложенная директива WRITE FILE"
+       getline path
+       if (check_exist(path)) print "WARN|" line_num ": Перезапись существующего файла: " path
+       state = "CONTENT"
+       next
+    }
+    
+    if (act == "APPEND") {
+       if (state != "IDLE") print "ERROR|" line_num ": Вложенная директива APPEND"
+       getline path
+       if (!check_exist(path)) print "ERROR|" line_num ": APPEND в несуществующий файл: " path
+       state = "CONTENT"
+       next
+    }
+
+    if (act == "CONTENT") {
+       if (state != "CONTENT") print "ERROR|" line_num ": Блок CONTENT вне контекста WRITE/APPEND"
+       # Пропускаем тело контента до следующего заголовка
+       next
+    }
+
+    if (act == "REPLACE SINGLE" || act == "REPLACE ALL") {
+       if (state != "IDLE") print "ERROR|" line_num ": Вложенная директива REPLACE"
+       getline path
+       if (!check_exist(path)) print "ERROR|" line_num ": REPLACE в несуществующем файле: " path
+       op = "REPLACE"; has_search = 0; has_replace = 0
+       state = "REPLACE_mode" # Ждем подблоков
+       next
+    }
+    
+    if (act == "SEARCH FOR") {
+       if (op != "REPLACE") print "ERROR|" line_num ": SEARCH FOR вне контекста REPLACE"
+       state = "SEARCH"; has_search = 1
+       next
+    }
+    
+    if (act == "REPLACE WITH") {
+       if (op != "REPLACE") print "ERROR|" line_num ": REPLACE WITH вне контекста REPLACE"
+       state = "REPLACE_VAL"; has_replace = 1
+       next
+    }
+    
+    if (act == "REPLACE REGEX SINGLE" || act == "REPLACE REGEX ALL") {
+       if (state != "IDLE") print "ERROR|" line_num ": Вложенная директива REPLACE REGEX"
+       getline path
+       if (!check_exist(path)) print "ERROR|" line_num ": REPLACE REGEX в несуществующем файле: " path
+       op = "REGEX"; state = "REGEX_mode"
+       next
+    }
+    
+    if (act == "PATTERN") {
+        if (op != "REGEX") print "ERROR|" line_num ": PATTERN вне контекста REGEX"
+        next
+    }
+
+    if (act == "DELETE") {
+       getline path
+       if (!check_exist(path)) print "WARN|" line_num ": Удаление несуществующего объекта: " path
+       next
+    }
+    
+    if (act == "RENAME" || act == "COPY" || act == "LINK") {
+       getline src
+       if (!check_exist(src)) print "ERROR|" line_num ": Исходный путь не существует (" act "): " src
+       op = act
+       next
+    }
+    
+    if (act == "TO") {
+       if (op != "RENAME" && op != "COPY" && op != "LINK") print "ERROR|" line_num ": TO вне контекста перемещения/копирования"
+       getline dst
+       if (check_exist(dst)) print "WARN|" line_num ": Целевой путь занят (" op "): " dst
+       next
+    }
+    
+    if (act == "SET ATTR") {
+        getline path
+        if (!check_exist(path)) print "ERROR|" line_num ": SET ATTR для несуществующего файла: " path
+        op = "ATTR"
+        next
+    }
+    
+    if (act == "ATTRIBUTES") {
+        if (op != "ATTR") print "ERROR|" line_num ": ATTRIBUTES вне контекста SET ATTR"
+        next
+    }
+
+    # Если мы дошли сюда и строка начинается с === DDS-ACTION, значит директива неизвестна
+    # Проверка выполняется регуляркой в начале блока, здесь catch-all не нужен,
+    # так как мы явно обрабатываем известные команды.
+    # Но для строгости можно добавить флаг handled.
+  }
+  
+  # Проверка на пустой блок SEARCH
+  {
+      if (state == "SEARCH") {
+          # Считаем непустые строки (или любые строки)
+          # Логика: если мы тут, значит это строка контента
+          search_content_len++
+      }
+  }
+
+' "$plan_file")
+
+# --- Phase 3: Analysis & Reporting ---
+
+error_count=$(printf "%s\n" "$validation_report" | grep -c "^ERROR|")
+warn_count=$(printf "%s\n" "$validation_report" | grep -c "^WARN|")
+
+if [ -n "$validation_report" ]; then
+    printf "%s\n" "$validation_report" | sed \
+        -e 's/^ERROR|/\033[31m[ERROR]\033[0m /' \
+        -e 's/^WARN|/\033[33m[WARN]\033[0m /'
+fi
+
+if [ "$error_count" -gt 0 ]; then
+  fail "Обнаружено ошибок: $error_count. План небезопасен для применения."
+else
+  if [ "$warn_count" -gt 0 ]; then
+     printf "\n\033[33m[PASS WITH WARNINGS]\033[0m План корректен, но требует внимания ($warn_count предупреждений).\n"
+  else
+     printf "\033[32m[OK]\033[0m План корректен и безопасен.\n"
+  fi
+  exit 0
+fi

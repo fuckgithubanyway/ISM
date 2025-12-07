@@ -1,0 +1,314 @@
+#!/usr/bin/env sh
+
+# DDS PLAN APPLICATOR
+#
+# Назначение: Применяет План Изменений к файловой системе.
+
+usage() {
+  cat << EOF
+Применяет План Изменений DDS к текущему проекту.
+
+Использование: $(basename "$0") [ОПЦИИ] [ЦЕЛЕВАЯ_ДИРЕКТОРИЯ]
+
+Ввод Плана:
+  (по умолчанию)   Чтение Плана из стандартного потока (stdin).
+  --file <путь>    Чтение Плана из указанного файла.
+
+Аргументы:
+  [ЦЕЛЕВАЯ_ДИРЕКТОРИЯ]  Корень проекта (по умолчанию: текущая директория).
+
+Опции:
+  --help           Показать справку.
+EOF
+}
+
+fail() {
+  printf "\033[31mFATAL ERROR:\033[0m %s\n" "$1" >&2
+  cleanup
+  exit 1
+}
+
+log() {
+  printf "\033[32m[APPLY]\033[0m %s\n" "$1"
+}
+
+# --- Configuration & Input Handling ---
+
+input_source="/dev/stdin"
+input_name="STDIN"
+target_arg="."
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help) usage; exit 0 ;;
+    
+    --file)
+      [ -z "$2" ] && fail "--file требует аргумент"
+      input_source="$2"
+      input_name="$2"
+      shift 2
+      ;;
+      
+    -*) fail "Неизвестная опция '$1'" ;;
+    
+    *) 
+      if [ "$target_arg" != "." ]; then fail "Целевая директория указана дважды"; fi
+      target_arg="$1"
+      shift 
+      ;;
+  esac
+done
+
+if [ ! -d "$target_arg" ]; then fail "Директория '$target_arg' не найдена."; fi
+
+# Преобразование в абсолютный путь для безопасности
+target_dir=$(CDPATH="" cd -- "$target_arg" && pwd)
+
+# Подготовка рабочего пространства
+tmp_dir="${TMPDIR:-/tmp}"
+workspace="$tmp_dir/dds_apply_$$"
+plan_file="$workspace/plan.clean"
+mkdir -p "$workspace"
+
+cleanup() {
+  rm -rf "$workspace"
+}
+trap cleanup EXIT
+
+# --- Phase 0: Input Sanitization (CRLF Removal) ---
+# Это критический шаг для работы с буфером обмена
+
+if [ "$input_source" = "/dev/stdin" ]; then
+  if [ -t 0 ]; then fail "Ожидается ввод из pipe или укажите --file"; fi
+  tr -d '\r' > "$plan_file"
+else
+  if [ ! -f "$input_source" ]; then fail "Файл плана не найден: $input_source"; fi
+  tr -d '\r' < "$input_source" > "$plan_file"
+fi
+
+if [ ! -s "$plan_file" ]; then fail "План Изменений пуст."; fi
+
+# --- Phase 1: Magic Header Check ---
+first_line=$(head -n 1 "$plan_file")
+case "$first_line" in
+  "=== DDS-ACTION"*) ;; # OK
+  *) fail "Неверный формат. Отсутствует заголовок '=== DDS-ACTION' в начале $input_name" ;;
+esac
+
+# --- Phase 2: Shell Executors ---
+
+do_write() {
+  _tgt="$target_dir/$1"
+  _src="$2"
+  log "WRITE $1" # Логируем относительный путь для читаемости
+  mkdir -p "$(dirname "$_tgt")"
+  cp "$_src" "$_tgt"
+}
+
+do_append() {
+  _tgt="$target_dir/$1"
+  _src="$2"
+  if [ ! -f "$_tgt" ]; then fail "APPEND: Файл не найден $1"; fi
+  log "APPEND $1"
+  cat "$_src" >> "$_tgt"
+}
+
+do_mkdir() {
+  _path="$target_dir/$1"
+  log "MKDIR $1"
+  mkdir -p "$_path"
+}
+
+do_delete() {
+  _path="$target_dir/$1"
+  log "DELETE $1"
+  rm -rf "$_path"
+}
+
+do_rename() {
+  _src="$target_dir/$1"
+  _dst="$target_dir/$2"
+  log "RENAME $1 -> $2"
+  mkdir -p "$(dirname "$_dst")"
+  mv "$_src" "$_dst"
+}
+
+do_copy() {
+  _src="$target_dir/$1"
+  _dst="$target_dir/$2"
+  log "COPY $1 -> $2"
+  mkdir -p "$(dirname "$_dst")"
+  cp -r "$_src" "$_dst"
+}
+
+do_link() {
+  _src="$1" 
+  _dst="$target_dir/$2"
+  log "LINK $_src -> $2"
+  mkdir -p "$(dirname "$_dst")"
+  ln -s "$_src" "$_dst"
+}
+
+do_setattr() {
+  _tgt="$target_dir/$1"
+  _mode="$2"
+  log "CHMOD $_mode $1"
+  chmod "$_mode" "$_tgt"
+}
+
+awk_replace_engine() {
+  awk '
+    BEGIN {
+      mode = ARGV[4]
+      ARGV[4] = "" 
+      
+      search_len = 0
+      while ((getline line < ARGV[2]) > 0) { search_block[search_len++] = line }
+      close(ARGV[2])
+
+      replace_len = 0
+      while ((getline line < ARGV[3]) > 0) { replace_block[replace_len++] = line }
+      close(ARGV[3])
+      
+      if (search_len == 0) { print "ERROR: Empty SEARCH block" > "/dev/stderr"; exit 1 }
+    }
+
+    { target_lines[NR-1] = $0 }
+
+    END {
+      total_lines = NR
+      matches_found = 0
+      
+      for (i = 0; i < total_lines; i++) {
+        match_here = 1
+        for (j = 0; j < search_len; j++) {
+          if ((i + j) >= total_lines || target_lines[i + j] != search_block[j]) {
+            match_here = 0; break
+          }
+        }
+
+        if (match_here == 1) {
+          matches_found++
+          if (mode == "SINGLE" && matches_found > 1) {
+            print "ERROR: Ambiguous Context. Found >1 matches." > "/dev/stderr"; exit 1
+          }
+          for (k = 0; k < replace_len; k++) print replace_block[k]
+          i += (search_len - 1)
+        } else {
+          print target_lines[i]
+        }
+      }
+
+      if (matches_found == 0) { print "ERROR: Context Not Found." > "/dev/stderr"; exit 1 }
+    }
+  ' "$1" "$2" "$3" "$4"
+}
+
+do_replace_exec() {
+  _tgt="$target_dir/$1"
+  _s="$2"
+  _r="$3"
+  _mode="$4"
+  
+  if [ ! -f "$_tgt" ]; then fail "REPLACE: Файл не найден $1"; fi
+  log "REPLACE ($_mode) in $1"
+  
+  _tmp_out="$workspace/patched.tmp"
+  
+  awk_replace_engine "$_tgt" "$_s" "$_r" "$_mode" > "$_tmp_out"
+  
+  if [ $? -ne 0 ]; then
+     fail "Ошибка применения патча к $1"
+  fi
+  mv "$_tmp_out" "$_tgt"
+}
+
+
+# --- Phase 3: Parsing & Script Generation ---
+
+export workspace
+
+# AWK генерирует файл 'exec.sh'
+# Важно: Добавлена проверка на неизвестные директивы
+awk -v workspace="$workspace" '
+  BEGIN { state="IDLE"; idx=0 }
+  
+  /^=== DDS-ACTION / {
+    if (cur_file) close(cur_file); cur_file=""
+
+    line=$0; sub(/^=== DDS-ACTION /, "", line); sub(/ ===$/, "", line)
+    split(line, p, ": ")
+    act=p[1]; arg=p[2]
+
+    if (act=="TERMINATE") {
+      if (op=="REPLACE") {
+        print "do_replace_exec \"" tgt "\" \"" s_file "\" \"" r_file "\" \"" mode "\""
+      }
+      if (op=="SET_ATTR") {
+         print "do_setattr \"" tgt "\" \"" attr_val "\""
+      }
+      state="IDLE"; op=""; next
+    }
+    if (act=="END") { print "exit 0"; exit }
+    if (act=="COMMENT") { state="SKIP"; next }
+    
+    if (act=="WRITE FILE") {
+       getline tgt; op="WRITE"; state="CONTENT"; idx++
+       c_file=workspace "/c_" idx ".tmp"
+       print "do_write \"" tgt "\" \"" c_file "\""
+       next
+    }
+    
+    if (act=="APPEND") {
+       getline tgt; op="APPEND"; state="CONTENT"; idx++
+       c_file=workspace "/c_" idx ".tmp"
+       print "do_append \"" tgt "\" \"" c_file "\""
+       next
+    }
+
+    if (act=="CONTENT") { if (state!="CONTENT") exit 1; cur_file=c_file; next }
+
+    if (act=="REPLACE SINGLE" || act=="REPLACE ALL") {
+       getline tgt; op="REPLACE"; mode=(act=="REPLACE SINGLE"?"SINGLE":"ALL")
+       next
+    }
+    
+    if (act=="SEARCH FOR") { state="SEARCH"; idx++; s_file=workspace "/s_" idx ".tmp"; cur_file=s_file; next }
+    if (act=="REPLACE WITH") { state="REPLACE"; idx++; r_file=workspace "/r_" idx ".tmp"; cur_file=r_file; next }
+    
+    if (act=="MAKE DIR") { getline d; print "do_mkdir \"" d "\""; next }
+    if (act=="DELETE")   { getline d; print "do_delete \"" d "\""; next }
+    
+    if (act=="RENAME") { getline src; op="RENAME"; next }
+    if (act=="COPY")   { getline src; op="COPY"; next }
+    if (act=="LINK")   { getline src; op="LINK"; next }
+    
+    if (act=="TO") { 
+       getline dst
+       if (op=="RENAME") print "do_rename \"" src "\" \"" dst "\""
+       if (op=="COPY")   print "do_copy \"" src "\" \"" dst "\""
+       if (op=="LINK")   print "do_link \"" src "\" \"" dst "\""
+       next 
+    }
+    
+    if (act=="SET ATTR") { getline tgt; op="SET_ATTR"; next }
+    if (act=="ATTRIBUTES") { getline attr_val; next }
+
+    # CATCH-ALL BLOCK FOR ERRORS
+    print "ERROR: Unrecognized directive: " act > "/dev/stderr"
+    exit 1
+  }
+
+  {
+    if (cur_file) print $0 >> cur_file
+  }
+' "$plan_file" > "$workspace/exec.sh"
+
+if [ $? -ne 0 ]; then
+  fail "Ошибка парсинга Плана."
+fi
+
+# --- Phase 4: Execution ---
+. "$workspace/exec.sh"
+
+log "План успешно применен."

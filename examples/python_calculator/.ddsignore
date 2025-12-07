@@ -1,3 +1,6 @@
-snapshot.*
+*.snap
+*.plan
+
 ./dds/scripts/
 ./dds/specs/tests/
+README.md

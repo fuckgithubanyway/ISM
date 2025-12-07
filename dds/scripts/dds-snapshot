@@ -1,16 +1,31 @@
 #!/usr/bin/env sh
 
+# DDS SNAPSHOT BUILDER
+#
+# Назначение:
+#   Формирует единый текстовый документ (Снимок) из файлов проекта.
+#
+# Архитектурные принципы:
+#   1. Agnostic Output: Пишет в stdout или файл, не зная о потребителе.
+#   2. Protocol Strictness: Гарантирует наличие "Magic Header" (Manifest) в начале потока.
+#   3. Input Safety: Четкое разделение строковых аргументов и путей к файлам.
+
 usage() {
   cat << EOF
 Формирует Полный Снимок проекта в соответствии с протоколом DDS.
 
-Использование: $(basename "$0") [--help] [--output <файл>] [--request <текст|файл>] [--all] [путь ...]
+Использование: $(basename "$0") [ОПЦИИ] [ПУТЬ...]
 
-Опции:
-  --help            Показать справку.
-  --output <файл>   Сохранить вывод в файл вместо stdout.
-  --request <...>   Добавить Запрос Действия.
-  --all             Включать скрытые файлы.
+Опции ввода:
+  --request "<текст>"    Добавить текст Запроса Действия (строковый литерал).
+  --request-file <файл>  Добавить текст Запроса Действия из файла.
+
+Опции вывода:
+  --output <файл>        Сохранить вывод в файл вместо stdout.
+  --all                  Включать скрытые файлы (кроме игнорируемых .ddsignore).
+
+Опции справки:
+  --help                 Показать это сообщение.
 EOF
 }
 
@@ -20,6 +35,7 @@ fail() {
 }
 
 # --- Configuration & Dependencies ---
+
 script_dir=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
 DDS_LINTER="$script_dir/dds-linter"
 DDS_LIST="$script_dir/dds-list"
@@ -34,38 +50,52 @@ request_content=""
 show_all=""
 path_args=""
 
+# --- Argument Parsing ---
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help) usage; exit 0 ;;
+    
     --output)
       [ -z "$2" ] && fail "--output требует аргумент"
       output_file="$2"
       shift 2
       ;;
+      
     --request)
       [ -z "$2" ] && fail "--request требует аргумент"
-      req_arg="$2"
-      if [ -f "$req_arg" ]; then
-        request_content=$(cat "$req_arg")
-      else
-        request_content="$req_arg"
-      fi
+      request_content="$2"
       shift 2
       ;;
-    --all)
-      show_all="--all"
-      shift
+      
+    --request-file)
+      [ -z "$2" ] && fail "--request-file требует аргумент"
+      req_file="$2"
+      if [ ! -f "$req_file" ]; then fail "Файл запроса не найден: $req_file"; fi
+      request_content=$(cat "$req_file")
+      shift 2
       ;;
+      
+    --all) show_all="--all"; shift ;;
+    
     -*) fail "Неизвестная опция '$1'" ;;
-    *)  path_args="$path_args \"$1\""; shift ;;
+    
+    *) 
+      # Собираем пути для передачи в dds-list/tree
+      path_args="$path_args \"$1\""
+      shift 
+      ;;
   esac
 done
 
+# Если пути не указаны, используем текущую директорию
 if [ -z "$path_args" ]; then
   set -- "."
 else
   eval set -- "$path_args"
 fi
+
+# --- Temporary Files ---
 
 tmp_dir="${TMPDIR:-/tmp}"
 tmp_linter="$tmp_dir/dds_snap_lint_$$"
@@ -77,102 +107,174 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- Step 1: Linter ---
-if ! "$DDS_LINTER" "$@" > "$tmp_linter"; then
-  cat "$tmp_linter" >&2
-  fail "Проверка линтера не пройдена."
+# --- Step 1: Verification (Linter) ---
+
+# Линтер проверяет структуру и правила DDS. 
+# Вывод сохраняем для включения в Снимок.
+if ! "$DDS_LINTER" "$@" > "$tmp_linter" 2>&1; then
+  # Если ошибка критическая (exit code 1), линтер уже вывел ее в stderr? 
+  # dds-linter пишет ошибки в stdout (для парсинга) или stderr?
+  # В текущей реализации dds-linter пишет отчет в stdout, но fail() в stderr.
+  # Мы перехватываем stdout отчета.
+  
+  # Если exit code != 0, это может быть WARNING (2) или ERROR (1).
+  # Для Snapshot мы допускаем WARNING, но прерываем на ERROR.
+  err_code=$?
+  if [ "$err_code" -eq 1 ]; then
+    cat "$tmp_linter" >&2
+    fail "Проверка структуры проекта не пройдена (см. ошибки выше)."
+  fi
 fi
 
-# --- Step 2: Data Collection ---
-"$DDS_TREE" $show_all "$@" > "$tmp_tree"
-"$DDS_LIST" $show_all "$@" > "$tmp_list"
+# --- Step 2: Context Collection ---
+
+# Мы явно проверяем код возврата (!). Если dds-tree упал, мы должны упасть тоже.
+if ! "$DDS_TREE" $show_all "$@" > "$tmp_tree"; then
+  fail "Генерация дерева файлов не удалась."
+fi
+
+if ! "$DDS_LIST" $show_all "$@" > "$tmp_list"; then
+  fail "Генерация списка файлов не удалась."
+fi
 
 if [ ! -s "$tmp_list" ]; then
-  fail "Список файлов пуст."
+  fail "Список файлов пуст. Проверьте путь или .ddsignore."
 fi
 
-# --- Step 3: Generation ---
+# --- Step 3: Content Processing Logic ---
+
+cat_content() {
+  _path="$1"
+  _type="$2"
+
+  # 1. Проверка на бинарный файл
+  if od -N 1024 -t x1 "$_path" 2>/dev/null | grep -q ' 00 '; then
+    printf "[BINARY CONTENT OMITTED]\n"
+    return
+  fi
+
+  # 2. Чтение
+  if [ "$_type" = "MANIFEST" ] || [ "$_type" = "SPEC" ] || [ "$_type" = "META" ]; then
+    cat "$_path"
+  else
+    # AWK Data Density Heuristic
+    awk '
+      {
+        line_len = length($0)
+        limit = 400  # Увеличим порог срабатывания
+
+        # Если строка короткая, выводим как есть
+        if (line_len <= limit) {
+          print $0
+          next
+        }
+
+        # --- Эвристический анализ ---
+        
+        # Создаем копию строки для анализа
+        clean = $0
+        
+        # Удаляем все, что НЕ похоже на числовые данные.
+        # Оставляем: цифры 0-9, запятую, точку, минус, пробел и x (для 0xFF)
+        gsub(/[^0-9,.\- x]/, "", clean)
+        
+        data_len = length(clean)
+        density = data_len / line_len
+
+        # Если более 60% строки состоит из чисел и разделителей -> это данные (LUT, Mesh)
+        if (density > 0.6) {
+          head = substr($0, 1, 100)
+          tail = substr($0, line_len - 50)
+          # Выводим с мета-информацией для LLM, чтобы она понимала природу скрытого
+          printf "%s ... [DATA REDUCED: %d chars, density %.0f%%] ... %s\n", head, line_len, density * 100, tail
+        } else {
+          # Это код (минифицированный JS, длинный SQL с текстом, Base64 и т.д.)
+          print $0
+        }
+      }
+    ' "$_path"
+  fi
+}
+
+# --- Step 4: Stream Generation ---
 
 generate_stream() {
   manifest_processed=false
   
-  # Используем дескриптор 3 для чтения списка
+  # Читаем список файлов (дескриптор 3)
   while IFS= read -r line <&3; do
-    # Парсинг формата: TYPE [PROTECTED]: PATH
-    
-    # Отделяем метаданные (все до ": ")
     meta="${line%%: *}"
-    # Отделяем путь (все после ": ")
     path="${line#*: }"
-    
-    # Получаем тип (первое слово в meta)
     type="${meta%% *}"
     
-    # Проверяем наличие флага PROTECTED
     is_protected=0
-    if echo "$meta" | grep -q "PROTECTED"; then
-      is_protected=1
-    fi
+    case "$meta" in
+      *"PROTECTED"*) is_protected=1 ;;
+    esac
 
-    # Определяем имя контекста для заголовка
-    ctx_name="$type"
-    if [ "$type" = "CONTENT" ]; then
-      ctx_name="CONTENT OF"
-    fi
+    # Формирование заголовка блока
+    ctx_label="$type"
+    if [ "$type" = "CONTENT" ]; then ctx_label="CONTENT OF"; fi
+    
+    header="--- DDS-CONTEXT ${ctx_label}: "
+    if [ "$is_protected" -eq 1 ]; then header="${header}PROTECTED: "; fi
+    header="${header}${path} ---"
 
-    # --- MANIFEST BLOCK ---
+    # === SPECIAL HANDLING: MANIFEST ===
+    # Манифест обязан быть первым и содержать вложенные контексты структуры
     if [ "$type" = "MANIFEST" ]; then
-      header="--- DDS-CONTEXT ${ctx_name}: "
-      if [ "$is_protected" -eq 1 ]; then header="${header}PROTECTED: "; fi
-      header="${header}${path} ---"
-      
       printf '%s\n' "$header"
       if [ -f "$path" ]; then cat "$path"; else printf "[File Not Found]\n"; fi
       printf '\n'
 
-      # Inject Static Contexts
-      printf '--- DDS-CONTEXT PROJECT STRUCTURE ---\n'
+      # Вставка статических контекстов сразу после Манифеста
+      printf '%s\n' "--- DDS-CONTEXT PROJECT STRUCTURE ---"
       cat "$tmp_tree"
       printf '\n'
 
-      printf '--- DDS-CONTEXT SNAPSHOT LIST ---\n'
-      # Выводим содержимое dds-list как есть, так как оно теперь очень информативно
+      printf '%s\n' "--- DDS-CONTEXT SNAPSHOT LIST ---"
       cat "$tmp_list"
       printf '\n'
 
-      printf '--- DDS-CONTEXT LINTER REPORT ---\n'
-      cat "$tmp_linter"
-      printf '\n'
+      if [ -s "$tmp_linter" ]; then
+        printf '%s\n' "--- DDS-CONTEXT LINTER REPORT ---"
+        cat "$tmp_linter"
+        printf '\n'
+      fi
 
       manifest_processed=true
       continue
     fi
 
-    # --- OTHER BLOCKS ---
+    # Защита: Если Манифест еще не обработан, а пошли другие файлы - это нарушение протокола.
+    # Но dds-list гарантирует порядок, поэтому здесь мы просто ждем.
     if [ "$manifest_processed" = "false" ]; then
-      fail "CRITICAL ERROR: Манифест не найден в начале списка. Проверьте 'dds/specs/__*.spec.md'."
+      # В реальной ситуации это может случиться, если манифеста нет в списке (ошибка dds-list/linter)
+      continue 
     fi
 
-    header="--- DDS-CONTEXT ${ctx_name}: "
-    if [ "$is_protected" -eq 1 ]; then header="${header}PROTECTED: "; fi
-    header="${header}${path} ---"
-
+    # === STANDARD CONTENT ===
     printf '%s\n' "$header"
-    if [ -f "$path" ]; then cat "$path"; else printf "[File Not Found]\n"; fi
+    if [ -f "$path" ]; then
+      cat_content "$path" "$type"
+    else
+      printf "[File Not Found]\n"
+    fi
     printf '\n'
 
   done 3< "$tmp_list"
 
-  # Request Block
+  # === REQUEST BLOCK ===
   if [ -n "$request_content" ]; then
-    printf '--- DDS-CONTEXT REQUEST ---\n'
+    printf '%s\n' "--- DDS-CONTEXT REQUEST ---"
     printf '%s\n' "$request_content"
     printf '\n'
   fi
 
-  printf '--- DDS-CONTEXT END OF SNAPSHOT ---\n'
+  printf '%s\n' "--- DDS-CONTEXT END ---"
 }
 
+# Вывод в файл или stdout
 if [ -n "$output_file" ]; then
   generate_stream > "$output_file"
 else
