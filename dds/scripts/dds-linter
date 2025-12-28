@@ -3,7 +3,7 @@
 # DDS INTEGRITY LINTER
 #
 # Назначение:
-#   Обеспечивает валидацию структуры проекта и соблюдение протокола DDS перед выполнением операций.
+#   Обеспечивает валидацию структуры проекта и соблюдение протокола DDS.
 #   Предотвращает создание некорректных Снимков и выявляет логические конфликты.
 #
 # Архитектурные принципы:
@@ -99,6 +99,32 @@ if [ -n "$clutter" ]; then
   warn_count=$((warn_count + 1))
 fi
 
+# 1.5 Check Naming Convention (Strict Whitelist)
+# Запрещает любые символы кроме безопасных POSIX-portable.
+invalid_paths=$(find "$target_dir" -print | awk '
+  {
+    # Логика очистки нужна только для проверки регулярного выражения
+    clean = $0
+    sub(/^\.\//, "", clean)
+    
+    # Пропускаем сам корень
+    if (clean == ".") next
+    
+    # Если найден недопустимый символ...
+    if (clean ~ /[^a-zA-Z0-9._\/-]/) {
+      # ...печатаем исходный полный путь ($0), а не обрезанный
+      print $0
+    }
+  }
+')
+
+# Блок обработки результата
+if [ -n "$invalid_paths" ]; then
+  printf "ERROR: Файлы содержат недопустимые символы в имени:\n"
+  printf "%s\n" "$invalid_paths" | sed 's/^/  - /'
+  err_count=$((err_count + 1))
+fi
+
 # --- Phase 2: Logic Checks (DDS-LIST vs DISK) ---
 
 tmp_dir="${TMPDIR:-/tmp}"
@@ -107,7 +133,7 @@ tmp_disk="$tmp_dir/dds_lint_disk_$$"
 trap 'rm -f "$tmp_snap" "$tmp_disk"' EXIT
 
 # Генерируем два "взгляда" на проект
-"$DDS_LIST" --all "$target_dir" > "$tmp_snap"
+"$DDS_LIST" "$target_dir" > "$tmp_snap"
 find "$specs_dir" -name "*.spec.*" > "$tmp_disk"
 
 awk -v root="$target_dir" '

@@ -6,9 +6,9 @@
 #   Формирует единый текстовый документ (Снимок) из файлов проекта.
 #
 # Архитектурные принципы:
-#   1. Agnostic Output: Пишет в stdout или файл, не зная о потребителе.
-#   2. Protocol Strictness: Гарантирует наличие "Magic Header" (Manifest) в начале потока.
-#   3. Input Safety: Четкое разделение строковых аргументов и путей к файлам.
+#   1. Agnostic Output: Пишет в stdout или файл.
+#   2. Protocol Strictness: Строгое соблюдение формата заголовков и порядка блоков.
+#   3. Input Safety: Четкое разделение данных и метаданных.
 
 usage() {
   cat << EOF
@@ -22,7 +22,6 @@ usage() {
 
 Опции вывода:
   --output <файл>        Сохранить вывод в файл вместо stdout.
-  --all                  Включать скрытые файлы (кроме игнорируемых .ddsignore).
 
 Опции справки:
   --help                 Показать это сообщение.
@@ -47,7 +46,6 @@ done
 
 output_file=""
 request_content=""
-show_all=""
 path_args=""
 
 # --- Argument Parsing ---
@@ -75,20 +73,16 @@ while [ "$#" -gt 0 ]; do
       request_content=$(cat "$req_file")
       shift 2
       ;;
-      
-    --all) show_all="--all"; shift ;;
     
     -*) fail "Неизвестная опция '$1'" ;;
     
     *) 
-      # Собираем пути для передачи в dds-list/tree
       path_args="$path_args \"$1\""
       shift 
       ;;
   esac
 done
 
-# Если пути не указаны, используем текущую директорию
 if [ -z "$path_args" ]; then
   set -- "."
 else
@@ -109,16 +103,8 @@ trap cleanup EXIT
 
 # --- Step 1: Verification (Linter) ---
 
-# Линтер проверяет структуру и правила DDS. 
-# Вывод сохраняем для включения в Снимок.
-if ! "$DDS_LINTER" "$@" > "$tmp_linter" 2>&1; then
-  # Если ошибка критическая (exit code 1), линтер уже вывел ее в stderr? 
-  # dds-linter пишет ошибки в stdout (для парсинга) или stderr?
-  # В текущей реализации dds-linter пишет отчет в stdout, но fail() в stderr.
-  # Мы перехватываем stdout отчета.
-  
-  # Если exit code != 0, это может быть WARNING (2) или ERROR (1).
-  # Для Snapshot мы допускаем WARNING, но прерываем на ERROR.
+# Запускаем линтер. Ошибки (exit 1) фатальны. Предупреждения (exit 2) допустимы.
+if ! "$DDS_LINTER" "$@" > "$tmp_linter"; then
   err_code=$?
   if [ "$err_code" -eq 1 ]; then
     cat "$tmp_linter" >&2
@@ -128,12 +114,13 @@ fi
 
 # --- Step 2: Context Collection ---
 
-# Мы явно проверяем код возврата (!). Если dds-tree упал, мы должны упасть тоже.
-if ! "$DDS_TREE" $show_all "$@" > "$tmp_tree"; then
+# Генерируем дерево (STRUCTURE)
+if ! "$DDS_TREE" "$@" > "$tmp_tree"; then
   fail "Генерация дерева файлов не удалась."
 fi
 
-if ! "$DDS_LIST" $show_all "$@" > "$tmp_list"; then
+# Генерируем список файлов (LIST)
+if ! "$DDS_LIST" "$@" > "$tmp_list"; then
   fail "Генерация списка файлов не удалась."
 fi
 
@@ -143,138 +130,157 @@ fi
 
 # --- Step 3: Content Processing Logic ---
 
-cat_content() {
-  _path="$1"
-  _type="$2"
+# Функция вывода заголовка
+print_header() {
+  # $1: Тип/Название, $2: Путь (опционально), $3: Protected (0/1)
+  _name="$1"
+  _path="$2"
+  _prot="$3"
+  
+  _prefix="DDS"
+  if [ "$_prot" -eq 1 ]; then _prefix="DDS-PROTECTED"; fi
+  
+  if [ -n "$_path" ]; then
+    # Добавлен разделитель -- перед строкой формата
+    printf -- "---- [%s %s: %s] ----\n" "$_prefix" "$_name" "$_path"
+  else
+    printf -- "---- [%s %s] ----\n" "$_prefix" "$_name"
+  fi
+}
 
-  # 1. Проверка на бинарный файл
-  if od -N 1024 -t x1 "$_path" 2>/dev/null | grep -q ' 00 '; then
-    printf "[BINARY CONTENT OMITTED]\n"
+process_file_content() {
+  _path="$1"
+  _type="$2" # MANIFEST, META, SPEC, CONTENT
+
+  if [ ! -f "$_path" ]; then
+    printf "[File Not Found]\n"
     return
   fi
 
-  # 2. Чтение
+  # MANIFEST, META, SPEC всегда текстовые
   if [ "$_type" = "MANIFEST" ] || [ "$_type" = "SPEC" ] || [ "$_type" = "META" ]; then
-    cat "$_path"
+    # cat "$_path"
+    nl -ba -w1 -s'|' "$_path"
+    return
+  fi
+
+  # Для CONTENT проверяем на бинарность (наличие нулевого байта в первых 1024 байтах)
+  is_binary=0
+  if command -v od >/dev/null 2>&1; then
+    if od -N 1024 -t x1 "$_path" 2>/dev/null | grep -q ' 00 '; then is_binary=1; fi
   else
-    # AWK Data Density Heuristic
+    # Fallback, если od нет (маловероятно на POSIX, но все же)
+    if file -b --mime-encoding "$_path" 2>/dev/null | grep -q "binary"; then is_binary=1; fi
+  fi
+
+  if [ "$is_binary" -eq 1 ]; then
+    return 1 # Signal binary
+  else
+    # Текстовый файл -> редукция
     awk '
       {
         line_len = length($0)
-        limit = 400  # Увеличим порог срабатывания
+        limit = 400
 
-        # Если строка короткая, выводим как есть
         if (line_len <= limit) {
           print $0
           next
         }
 
-        # --- Эвристический анализ ---
-        
-        # Создаем копию строки для анализа
         clean = $0
-        
-        # Удаляем все, что НЕ похоже на числовые данные.
-        # Оставляем: цифры 0-9, запятую, точку, минус, пробел и x (для 0xFF)
         gsub(/[^0-9,.\- x]/, "", clean)
-        
-        data_len = length(clean)
-        density = data_len / line_len
+        density = length(clean) / line_len
 
-        # Если более 60% строки состоит из чисел и разделителей -> это данные (LUT, Mesh)
         if (density > 0.6) {
           head = substr($0, 1, 100)
           tail = substr($0, line_len - 50)
-          # Выводим с мета-информацией для LLM, чтобы она понимала природу скрытого
-          printf "%s ... [DATA REDUCED: %d chars, density %.0f%%] ... %s\n", head, line_len, density * 100, tail
+          printf "%s ... DDS REDUCED ... %s\n", head, tail
         } else {
-          # Это код (минифицированный JS, длинный SQL с текстом, Base64 и т.д.)
           print $0
         }
       }
     ' "$_path"
+    return 0
   fi
 }
 
 # --- Step 4: Stream Generation ---
 
 generate_stream() {
-  manifest_processed=false
-  
-  # Читаем список файлов (дескриптор 3)
+  # 1. Project Structure
+  print_header "PROJECT STRUCTURE" "" 0
+  cat "$tmp_tree"
+  printf "\n"
+
+  # 2. Snapshot List
+  print_header "SNAPSHOT LIST" "" 0
+  cat "$tmp_list"
+  printf "\n"
+
+  # 3. Linter Report
+  if [ -s "$tmp_linter" ]; then
+    print_header "LINTER REPORT" "" 0
+    cat "$tmp_linter"
+    printf "\n"
+  fi
+
+  # 4. Files
   while IFS= read -r line <&3; do
     meta="${line%%: *}"
     path="${line#*: }"
     type="${meta%% *}"
     
     is_protected=0
-    case "$meta" in
-      *"PROTECTED"*) is_protected=1 ;;
-    esac
+    case "$meta" in *"PROTECTED"*) is_protected=1 ;; esac
 
-    # Формирование заголовка блока
-    ctx_label="$type"
-    if [ "$type" = "CONTENT" ]; then ctx_label="CONTENT OF"; fi
+    block_title="$type"
     
-    header="--- DDS-CONTEXT ${ctx_label}: "
-    if [ "$is_protected" -eq 1 ]; then header="${header}PROTECTED: "; fi
-    header="${header}${path} ---"
-
-    # === SPECIAL HANDLING: MANIFEST ===
-    # Манифест обязан быть первым и содержать вложенные контексты структуры
-    if [ "$type" = "MANIFEST" ]; then
-      printf '%s\n' "$header"
-      if [ -f "$path" ]; then cat "$path"; else printf "[File Not Found]\n"; fi
-      printf '\n'
-
-      # Вставка статических контекстов сразу после Манифеста
-      printf '%s\n' "--- DDS-CONTEXT PROJECT STRUCTURE ---"
-      cat "$tmp_tree"
-      printf '\n'
-
-      printf '%s\n' "--- DDS-CONTEXT SNAPSHOT LIST ---"
-      cat "$tmp_list"
-      printf '\n'
-
-      if [ -s "$tmp_linter" ]; then
-        printf '%s\n' "--- DDS-CONTEXT LINTER REPORT ---"
-        cat "$tmp_linter"
-        printf '\n'
+    if [ "$type" = "CONTENT" ]; then
+      is_binary=0
+      if [ -f "$path" ]; then
+         if od -N 1024 -t x1 "$path" 2>/dev/null | grep -q ' 00 '; then is_binary=1; fi
       fi
-
-      manifest_processed=true
-      continue
-    fi
-
-    # Защита: Если Манифест еще не обработан, а пошли другие файлы - это нарушение протокола.
-    # Но dds-list гарантирует порядок, поэтому здесь мы просто ждем.
-    if [ "$manifest_processed" = "false" ]; then
-      # В реальной ситуации это может случиться, если манифеста нет в списке (ошибка dds-list/linter)
-      continue 
-    fi
-
-    # === STANDARD CONTENT ===
-    printf '%s\n' "$header"
-    if [ -f "$path" ]; then
-      cat_content "$path" "$type"
+      
+      if [ "$is_binary" -eq 1 ]; then
+        block_title="INFO OF"
+        print_header "$block_title" "$path" "$is_protected"
+        if command -v file >/dev/null 2>&1; then
+           file -b "$path" 2>/dev/null || echo "Binary file"
+        else
+           echo "Binary file"
+        fi
+        if _size_bytes=$(wc -c < "$path" 2>/dev/null); then
+           _size_clean=$(echo $_size_bytes)
+           printf "Size: %s bytes\n" "$_size_clean"
+        fi
+      else
+        block_title="CONTENT OF"
+        print_header "$block_title" "$path" "$is_protected"
+        process_file_content "$path" "$type"
+      fi
     else
-      printf "[File Not Found]\n"
+      print_header "$block_title" "$path" "$is_protected"
+      if [ -f "$path" ]; then
+        cat "$path"
+      else
+        printf "[File Not Found]\n"
+      fi
     fi
-    printf '\n'
+    printf "\n"
 
   done 3< "$tmp_list"
 
-  # === REQUEST BLOCK ===
+  # 5. Request
   if [ -n "$request_content" ]; then
-    printf '%s\n' "--- DDS-CONTEXT REQUEST ---"
+    print_header "REQUEST" "" 0
     printf '%s\n' "$request_content"
     printf '\n'
   fi
 
-  printf '%s\n' "--- DDS-CONTEXT END ---"
+  # 6. End
+  print_header "END OF SNAPSHOT" "" 0
 }
 
-# Вывод в файл или stdout
 if [ -n "$output_file" ]; then
   generate_stream > "$output_file"
 else

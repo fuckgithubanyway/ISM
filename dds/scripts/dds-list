@@ -30,17 +30,16 @@ DDS Context Builder — Формирователь семантического 
 последовательность артефактов.
 
 Принципы работы:
-  1. Сканирование: Использует dds-tree для получения полного списка.
+  1. Сканирование: Использует dds-tree для получения полного списка файлов.
   2. Фильтрация: Применяет исключения из .ddsignore (синтаксис glob).
   3. Защита: Определяет защищенные файлы на основе .ddsprotect.
   4. Классификация: Определяет тип файла (Manifest, Meta, Spec, Content).
   5. Приоритизация: Сортирует вывод для правильной подачи в LLM (Manifest -> Meta -> Spec -> Content).
 
-Использование: $(basename "$0") [--help] [--all] [путь ...]
+Использование: $(basename "$0") [--help] [путь ...]
 
 Опции:
   --help    Показать справку.
-  --all     Включать скрытые файлы (транслируется в dds-tree).
 
 Формат вывода (Протокол):
   TYPE [PROTECTED]: PATH
@@ -59,7 +58,6 @@ fail() {
 }
 
 # --- Configuration ---
-SHOW_ALL=0
 TARGET_PATHS=""
 
 # --- Dependencies ---
@@ -72,7 +70,6 @@ if ! [ -x "$DDS_TREE" ]; then fail "Зависимость '$DDS_TREE' не на
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help) usage; exit 0 ;;
-    --all)  SHOW_ALL=1; shift ;;
     -*)     fail "Неизвестная опция $1" ;;
     *)      TARGET_PATHS="$TARGET_PATHS \"$1\""; shift ;;
   esac
@@ -236,14 +233,9 @@ trap 'rm -f "$tmp_rules"' EXIT
 
 collect_rules > "$tmp_rules"
 
-tree_args="--plain"
-if [ "$SHOW_ALL" -eq 1 ]; then
-  tree_args="$tree_args --all"
-fi
-
 eval set -- "$TARGET_PATHS"
 
-"$DDS_TREE" $tree_args "$@" | \
+"$DDS_TREE" --plain "$@" | \
 awk -F"\t" "$awk_script" "$tmp_rules" - | \
 sort -k1,1n -k2 | \
 cut -f2-
