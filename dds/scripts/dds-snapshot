@@ -141,7 +141,6 @@ print_header() {
   if [ "$_prot" -eq 1 ]; then _prefix="DDS-PROTECTED"; fi
   
   if [ -n "$_path" ]; then
-    # Добавлен разделитель -- перед строкой формата
     printf -- "---- [%s %s: %s] ----\n" "$_prefix" "$_name" "$_path"
   else
     printf -- "---- [%s %s] ----\n" "$_prefix" "$_name"
@@ -150,58 +149,82 @@ print_header() {
 
 process_file_content() {
   _path="$1"
-  _type="$2" # MANIFEST, META, SPEC, CONTENT
-
+  
   if [ ! -f "$_path" ]; then
     printf "[File Not Found]\n"
     return
   fi
 
-  # MANIFEST, META, SPEC всегда текстовые
-  if [ "$_type" = "MANIFEST" ] || [ "$_type" = "SPEC" ] || [ "$_type" = "META" ]; then
-    # cat "$_path"
-    nl -ba -w1 -s'|' "$_path"
-    return
-  fi
-
-  # Для CONTENT проверяем на бинарность (наличие нулевого байта в первых 1024 байтах)
+  # 1. Проверка на бинарность (Fallback, если не отловлено ранее)
   is_binary=0
   if command -v od >/dev/null 2>&1; then
     if od -N 1024 -t x1 "$_path" 2>/dev/null | grep -q ' 00 '; then is_binary=1; fi
   else
-    # Fallback, если od нет (маловероятно на POSIX, но все же)
     if file -b --mime-encoding "$_path" 2>/dev/null | grep -q "binary"; then is_binary=1; fi
   fi
 
   if [ "$is_binary" -eq 1 ]; then
-    return 1 # Signal binary
-  else
-    # Текстовый файл -> редукция
-    awk '
-      {
-        line_len = length($0)
-        limit = 400
+    # Бинарные файлы должны обрабатываться веткой INFO OF, но если попали сюда - выходим
+    return 1
+  fi
 
-        if (line_len <= limit) {
-          print $0
-          next
-        }
+  # 2. Единая обработка текста (Нумерация + Умная редукция)
+  awk '
+    BEGIN {
+      LIMIT = 400
+      THRESHOLD = 0.8
+    }
 
-        clean = $0
-        gsub(/[^0-9,.\- x]/, "", clean)
-        density = length(clean) / line_len
+    {
+      # Форматирование номера строки
+      prefix = sprintf("%4d | ", NR)
 
-        if (density > 0.6) {
-          head = substr($0, 1, 100)
-          tail = substr($0, line_len - 50)
-          printf "%s ... DDS REDUCED ... %s\n", head, tail
-        } else {
-          print $0
+      # Быстрый пропуск коротких строк
+      if (length($0) <= LIMIT) {
+        print prefix $0
+        next
+      }
+
+      # Логика умной редукции числовых массивов
+      n = split($0, tokens, /[ \t,;\[\](){}=]+/)
+      
+      if (n == 0) {
+         print prefix $0
+         next
+      }
+
+      numeric_hits = 0
+      total_meaningful = 0
+
+      for (i = 1; i <= n; i++) {
+        val = tokens[i]
+        if (val == "") continue
+        
+        total_meaningful++
+        
+        if (val ~ /^(0[xX][0-9a-fA-F]+)$/ || \
+            val ~ /^(0[bB][01]+)$/ || \
+            val ~ /^([+-]?[0-9]*\.?[0-9]+([eE][+-]?[0-9]+)?)$/) {
+          numeric_hits++
         }
       }
-    ' "$_path"
-    return 0
-  fi
+
+      ratio = 0
+      if (total_meaningful > 0) {
+         ratio = numeric_hits / total_meaningful
+      }
+
+      if (ratio >= THRESHOLD) {
+        head = substr($0, 1, 100)
+        tail = substr($0, length($0) - 50)
+        printf "%s%s ... DDS REDUCED ... %s\n", prefix, head, tail
+      } else {
+        print prefix $0
+      }
+    }
+  ' "$_path"
+  
+  return 0
 }
 
 # --- Step 4: Stream Generation ---
@@ -233,17 +256,27 @@ generate_stream() {
     is_protected=0
     case "$meta" in *"PROTECTED"*) is_protected=1 ;; esac
 
+    # Логика определения заголовка и обработки контента
     block_title="$type"
+    use_info_header=0
     
+    # Только для CONTENT проверяем на бинарность для смены заголовка
     if [ "$type" = "CONTENT" ]; then
-      is_binary=0
       if [ -f "$path" ]; then
-         if od -N 1024 -t x1 "$path" 2>/dev/null | grep -q ' 00 '; then is_binary=1; fi
+         if od -N 1024 -t x1 "$path" 2>/dev/null | grep -q ' 00 '; then use_info_header=1; fi
       fi
       
-      if [ "$is_binary" -eq 1 ]; then
+      if [ "$use_info_header" -eq 1 ]; then
         block_title="INFO OF"
-        print_header "$block_title" "$path" "$is_protected"
+      else
+        block_title="CONTENT OF"
+      fi
+    fi
+
+    print_header "$block_title" "$path" "$is_protected"
+    
+    if [ "$use_info_header" -eq 1 ]; then
+        # Обработка бинарного файла (инфо)
         if command -v file >/dev/null 2>&1; then
            file -b "$path" 2>/dev/null || echo "Binary file"
         else
@@ -253,19 +286,12 @@ generate_stream() {
            _size_clean=$(echo $_size_bytes)
            printf "Size: %s bytes\n" "$_size_clean"
         fi
-      else
-        block_title="CONTENT OF"
-        print_header "$block_title" "$path" "$is_protected"
-        process_file_content "$path" "$type"
-      fi
     else
-      print_header "$block_title" "$path" "$is_protected"
-      if [ -f "$path" ]; then
-        cat "$path"
-      else
-        printf "[File Not Found]\n"
-      fi
+        # Обработка текстового файла (Манифест, Спеки, Код)
+        # Все идет через process_file_content для нумерации
+        process_file_content "$path"
     fi
+    
     printf "\n"
 
   done 3< "$tmp_list"
