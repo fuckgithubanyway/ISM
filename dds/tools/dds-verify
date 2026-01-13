@@ -1,0 +1,83 @@
+#!/usr/bin/env sh
+
+set -u
+export LC_ALL=C
+
+usage() {
+  cat << EOF
+Usage: $(basename "$0") [--help] [PATH]
+
+Verifies DDS Protocol Compliance.
+
+Checks:
+  - 'dds/specs' directory exists.
+  - Exactly ONE Manifest file ('__*.spec.md') exists in 'dds/specs'.
+  - No other Manifest-like files exist in subdirectories.
+  - All files in 'dds/specs' must end with '.spec.md'.
+
+Arguments:
+  PATH       Project root (default: current).
+EOF
+}
+
+fail_hard() {
+  printf "[CRITICAL] %s\n" "$1" >&2
+  exit 2
+}
+
+# --- Arguments ---
+TARGET_DIR="."
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help) usage; exit 0 ;;
+    -*) printf "Unknown option: %s\n" "$1" >&2; exit 1 ;;
+    *) TARGET_DIR="$1"; shift ;;
+  esac
+done
+
+if [ ! -d "$TARGET_DIR" ]; then fail_hard "Directory not found: $TARGET_DIR"; fi
+
+# --- Configuration ---
+SPECS_DIR="${TARGET_DIR%/}/dds/specs"
+
+# --- Check 1: Root Structure ---
+if [ ! -d "$SPECS_DIR" ]; then
+  fail_hard "Missing mandatory directory: 'dds/specs'."
+fi
+
+# --- Check 2: Manifest Singleton ---
+# Find files starting with __ inside dds/specs (non-recursive)
+root_manifests=$(find "$SPECS_DIR" -maxdepth 1 -name "__*.spec.md")
+root_count=$(echo "$root_manifests" | grep -c .)
+
+if [ "$root_manifests" = "" ]; then root_count=0; fi
+
+if [ "$root_count" -eq 0 ]; then
+  fail_hard "No Manifest found in '$SPECS_DIR'. (Expected file matching '__*.spec.md')"
+elif [ "$root_count" -gt 1 ]; then
+  printf "[FAIL] Multiple Manifests found in root (Must be exactly one):\n" >&2
+  printf "%s\n" "$root_manifests" | sed 's/^/  - /' >&2
+  exit 1
+fi
+
+# --- Check 3: Deep Manifests (Forbidden) ---
+# Manifest must act as Root. Manifests in subdirs are confusing.
+deep_manifests=$(find "$SPECS_DIR" -mindepth 2 -name "__*.spec.md")
+if [ -n "$deep_manifests" ]; then
+  printf "[FAIL] Manifests found in subdirectories (Allowed only in dds/specs root):\n" >&2
+  printf "%s\n" "$deep_manifests" | sed 's/^/  - /' >&2
+  exit 1
+fi
+
+# --- Check 4: Extension Hygiene ---
+invalid_files=$(find "$SPECS_DIR" -type f ! -name "*.spec.md")
+
+if [ -n "$invalid_files" ]; then
+  printf "[FAIL] Invalid files detected in 'dds/specs' (Must end in .spec.md):\n" >&2
+  printf "%s\n" "$invalid_files" | sed 's/^/  - /' >&2
+  exit 1
+fi
+
+echo "Verification Passed: Protocol Compliant."
+exit 0

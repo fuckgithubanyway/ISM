@@ -1,0 +1,151 @@
+#!/usr/bin/env sh
+
+set -u
+export LC_ALL=C
+
+usage() {
+  cat << EOF
+Usage: $(basename "$0") [--help] [--plain] [PATH]
+
+Options:
+  --help     Show this message.
+  --plain    Output flat list. 
+             - Directories always end with '/'.
+             - Symlinks shown as 'path -> target'.
+
+Arguments:
+  PATH       Root directory (default: current).
+EOF
+}
+
+fail() {
+  printf "ERROR: %s\n" "$1" >&2
+  exit 1
+}
+
+# --- Core Logic ---
+
+resolve_link() {
+  ls -ld -- "$1" 2>/dev/null | sed 's/.* -> //'
+}
+
+traverse() (
+  _path="$1"
+  _prefix="$2"
+  _visited="$3"
+
+  _items=$(find -H "$_path" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
+
+  if [ -z "$_items" ]; then return; fi
+
+  _total=$(printf '%s\n' "$_items" | wc -l)
+  _count=0
+
+  printf '%s\n' "$_items" | while IFS= read -r _full_path; do
+    _count=$((_count + 1))
+    _name=$(basename -- "$_full_path")
+    
+    if [ -z "$_name" ]; then continue; fi
+
+    _is_dir=0
+    _is_link=0
+    if [ -d "$_full_path" ]; then _is_dir=1; fi
+    if [ -L "$_full_path" ]; then _is_link=1; fi
+
+    # --- Cycle Detection ---
+    _cycle_detected=0
+    _new_visited="$_visited"
+    
+    if [ $_is_dir -eq 1 ]; then
+      _inode=$(ls -idL -- "$_full_path" 2>/dev/null | awk '{print $1}')
+      if [ -n "$_inode" ]; then
+        case "$_visited" in
+          *" $_inode "*) _cycle_detected=1 ;;
+          *) _new_visited="$_visited $_inode " ;;
+        esac
+      fi
+    fi
+
+    # --- Formatting ---
+    _display_name="$_name"
+    _suffix=""
+    
+    if [ $_is_link -eq 1 ]; then
+      _target=$(resolve_link "$_full_path")
+      _suffix=" -> $_target"
+      if [ -d "$_full_path" ]; then
+         _display_name="${_display_name}/"
+      fi
+    elif [ $_is_dir -eq 1 ]; then
+      _display_name="${_display_name}/"
+    fi
+
+    if [ $_cycle_detected -eq 1 ]; then
+      _suffix="$_suffix [RECURSIVE]"
+    fi
+
+    # --- Output ---
+    if [ "$MODE_PLAIN" = "1" ]; then
+      # Plain Mode: Relative path
+      _clean_path=$(printf '%s' "$_full_path" | sed 's|^\./||')
+      
+      if [ $_is_dir -eq 1 ]; then
+        case "$_clean_path" in
+          */) ;;
+          *) _clean_path="${_clean_path}/" ;;
+        esac
+      fi
+      
+      # FIX: Direct print, no awk, no cycle flag artifact
+      printf "%s%s\n" "$_clean_path" "$_suffix"
+
+    else
+      # Visual Mode
+      if [ "$_count" -eq "$_total" ]; then
+        _connector="└── "
+        _next_prefix="${_prefix}    "
+      else
+        _connector="├── "
+        _next_prefix="${_prefix}│   "
+      fi
+      
+      printf "%s%s%s%s%s\n" "$_prefix" "$_connector" "$_display_name" "$_suffix"
+    fi
+
+    # --- Recursion ---
+    if [ $_is_dir -eq 1 ] && [ $_cycle_detected -eq 0 ]; then
+       if [ "$MODE_PLAIN" = "1" ]; then
+         traverse "$_full_path" "" "$_new_visited"
+       else
+         traverse "$_full_path" "$_next_prefix" "$_new_visited"
+       fi
+    fi
+  done
+)
+
+# --- Parse Args ---
+
+MODE_PLAIN=0
+ROOT_DIR="."
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --plain) MODE_PLAIN=1; shift ;;
+    --help) usage; exit 0 ;;
+    -*) fail "Unknown option $1" ;;
+    *) ROOT_DIR="$1"; shift ;;
+  esac
+done
+
+if [ ! -e "$ROOT_DIR" ]; then fail "Path not found: $ROOT_DIR"; fi
+ROOT_DIR="${ROOT_DIR%/}"
+if [ "$ROOT_DIR" = "" ]; then ROOT_DIR="."; fi
+
+if [ "$MODE_PLAIN" = "0" ]; then
+  echo "$ROOT_DIR"
+fi
+
+if [ -d "$ROOT_DIR" ]; then
+  root_inode=$(ls -idL -- "$ROOT_DIR" 2>/dev/null | awk '{print $1}')
+  traverse "$ROOT_DIR" "" " $root_inode "
+fi

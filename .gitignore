@@ -5,3 +5,7 @@ Thumbs.db
 # Файлы IDE
 .vscode/
 .idea/
+
+*.swp
+*.swo
+

@@ -1,1 +1,0 @@
-../../../../dds/specs/__dds.spec.md

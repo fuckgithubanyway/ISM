@@ -1,0 +1,167 @@
+#!/usr/bin/env sh
+
+set -u
+
+usage() {
+  cat << EOF
+Usage: $(basename "$0") [--help] [--view FILE] [PATH]
+
+Options:
+  --view FILE   Path to .ddsview file. 
+                If omitted, includes ALL files (except default ignores).
+
+Arguments:
+  PATH          Project root (default: current).
+EOF
+}
+
+fail() {
+  printf "ERROR: %s\n" "$1" >&2
+  exit 1
+}
+
+# --- Arguments ---
+VIEW_FILE=""
+TARGET_DIR="."
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help) usage; exit 0 ;;
+    --view) 
+      if [ -z "$2" ]; then fail "Missing argument for --view"; fi
+      VIEW_FILE="$2"
+      shift 2 
+      ;;
+    -*) fail "Unknown option: $1" ;;
+    *) 
+      TARGET_DIR="$1"
+      shift 
+      ;;
+  esac
+done
+
+# --- Dependencies ---
+SCRIPT_DIR=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
+DDS_TREE="$SCRIPT_DIR/dds-tree"
+
+if [ ! -x "$DDS_TREE" ]; then fail "dds-tree not found at $DDS_TREE"; fi
+
+# --- AWK Logic ---
+
+awk_script='
+function glob2regex(pat,   res) {
+  gsub(/[.+^$(){}|]/, "\\\\&", pat)
+  gsub(/\*\*/, "\001", pat)
+  gsub(/\*/, "[^/]*", pat)
+  gsub(/\?/, "[^/]", pat)
+  gsub(/\001/, ".*", pat)
+  return pat
+}
+
+BEGIN {
+  ignore_count = 0
+  ign[ignore_count++] = "^\\.git/"
+  ign[ignore_count++] = "/\\.git/"
+  ign[ignore_count++] = "\\.DS_Store$"
+  ign[ignore_count++] = "\\.swp$"
+  
+  rule_count = 0
+  has_view = 0
+}
+
+NR == FNR && VIEW_FILE != "" {
+  has_view = 1
+  line = $0
+  gsub(/^[ \t]+|[ \t]+$/, "", line)
+  if (line == "" || index(line, "#") == 1) next
+  
+  is_neg = 0
+  if (index(line, "!") == 1) {
+    is_neg = 1
+    line = substr(line, 2)
+  }
+  
+  sub(/^\.\//, "", line)
+  
+  if (substr(line, length(line)) == "/") {
+    regex = "^" glob2regex(line) ".*"
+  } else {
+    regex = "^" glob2regex(line) "$"
+  }
+  
+  rules[rule_count, "regex"] = regex
+  rules[rule_count, "neg"] = is_neg
+  rule_count++
+  next
+}
+
+{
+  raw = $0
+  sub(/ \[RECURSIVE\]$/, "", raw)
+
+  idx = index(raw, " -> ")
+  if (idx > 0) {
+    path = substr(raw, 1, idx - 1)
+  } else {
+    path = raw
+  }
+  
+  sub(/^\.\//, "", path)
+
+  if (substr(path, length(path)) == "/") next
+
+  for (i=0; i<ignore_count; i++) {
+    if (path ~ ign[i]) next
+  }
+
+  keep = 1
+  if (has_view) {
+    keep = 0 
+    for (i=0; i<rule_count; i++) {
+      if (path ~ rules[i, "regex"]) {
+        if (rules[i, "neg"]) keep = 0
+        else keep = 1
+      }
+    }
+  }
+  
+  if (keep == 0) next
+  
+  # --- CLASSIFICATION UPDATE ---
+  rank = 4
+  type = "CONTENT"
+  
+  if (index(path, "dds/specs/") == 1) {
+    # 1. Manifest: __*.spec.md (Double underscore)
+    if (path ~ /\/__.*\.spec\.md$/) {
+      rank = 1
+      type = "MANIFEST"
+    
+    # 2. Meta: _*.spec.md (Single underscore). 
+    # Since Manifest logic is above, it wont catch here.
+    } else if (path ~ /\/_.*\.spec\.md$/ || path ~ /^dds\/specs\/_.*\.spec\.md$/) {
+      rank = 2
+      type = "META"
+    
+    # 3. Spec: Normal specs
+    } else if (path ~ /\.spec\.md$/) {
+      rank = 3
+      type = "SPEC"
+    
+    } else {
+      rank = 5
+    }
+  }
+  
+  print rank "\t" type ": " path
+}
+'
+
+# --- Execution ---
+
+if [ -n "$VIEW_FILE" ]; then
+  if [ ! -f "$VIEW_FILE" ]; then fail "View file not found: $VIEW_FILE"; fi
+  "$DDS_TREE" --plain "$TARGET_DIR" | awk -v VIEW_FILE="1" "$awk_script" "$VIEW_FILE" - | sort -n -k1,1
+else
+  "$DDS_TREE" --plain "$TARGET_DIR" | awk -v VIEW_FILE="" "$awk_script" /dev/null - | sort -n -k1,1
+fi | cut -f2-
