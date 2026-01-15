@@ -81,7 +81,21 @@ trap cleanup EXIT
 # --- Execution Phase ---
 
 # 1. Protocol Verification
-"$DDS_VERIFY" "$TARGET_DIR" > "$T_VERIFY" 2>&1
+if [ -n "$VIEW_FILE" ]; then
+  "$DDS_VERIFY" --view "$VIEW_FILE" "$TARGET_DIR" > "$T_VERIFY" 2>&1
+else
+  "$DDS_VERIFY" "$TARGET_DIR" > "$T_VERIFY" 2>&1
+fi
+
+verify_status=$?
+
+# Если верификация не прошла - прерываем работу.
+# dds-verify теперь возвращает exit 1 при наличии запрещенных строк.
+if [ $verify_status -ne 0 ]; then
+  cat "$T_VERIFY" >&2
+  rm -f "$T_VERIFY" "$T_TREE" "$T_LIST"
+  exit 1
+fi
 
 # 2. Project Structure
 "$DDS_TREE" --plain "$TARGET_DIR" > "$T_TREE"
@@ -99,9 +113,9 @@ generate_stream() {
   # Header Helper
   print_header() {
     if [ -n "$2" ]; then
-      printf -- "---- DDS %s: %s ----\n" "$1" "$2"
+      printf -- "-%s DDS %s: %s ----\n" "---" "$1" "$2"
     else
-      printf -- "---- DDS %s ----\n" "$1"
+      printf -- "-%s DDS %s ----\n" "---" "$1"
     fi
   }
 

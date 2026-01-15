@@ -3,21 +3,28 @@
 set -u
 export LC_ALL=C
 
+# --- CONSTANTS ---
+SIG_PART_1="---- "
+SIG_PART_2="DDS "
+# Собираем строку динамически, чтобы сам скрипт не содержал запрещенную последовательность
+FORBIDDEN_SIG="${SIG_PART_1}${SIG_PART_2}"
+
 usage() {
-  cat << EOF
-Usage: $(basename "$0") [--help] [PATH]
-
-Verifies DDS Protocol Compliance.
-
-Checks:
-  - 'dds/specs' directory exists.
-  - Exactly ONE Manifest file ('__*.spec.md') exists in 'dds/specs'.
-  - No other Manifest-like files exist in subdirectories.
-  - All files in 'dds/specs' must end with '.spec.md'.
-
-Arguments:
-  PATH       Project root (default: current).
-EOF
+  printf "Usage: $(basename "$0") [--view FILE] [PATH]\n\n"
+  printf "Verifies DDS Protocol Compliance.\n"
+  printf "Checks:\n"
+  printf "  1. Toolchain Integrity:\n"
+  printf "     - Essential scripts exist and are executable.\n"
+  printf "  2. Project Structure (Global):\n"
+  printf "     - 'dds/specs' exists.\n"
+  printf "     - Unique Manifest exists.\n"
+  printf "  3. Projection Safety (Scoped to View):\n"
+  printf "     - Files included in the Projection must NOT contain\n"
+  printf "       the forbidden sequence: '%s'.\n" "$FORBIDDEN_SIG"
+  printf "     - All Specification files (*.spec.md) MUST be located\n"
+  printf "       inside the 'dds/specs/' directory.\n\n"
+  printf "Arguments:\n"
+  printf "  PATH          Project root (default: current).\n"
 }
 
 fail_hard() {
@@ -26,11 +33,15 @@ fail_hard() {
 }
 
 # --- Arguments ---
+VIEW_FILE=""
 TARGET_DIR="."
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help) usage; exit 0 ;;
+    --view)
+      if [ -z "$2" ]; then fail_hard "Missing argument for --view"; fi
+      VIEW_FILE="$2"; shift 2 ;;
     -*) printf "Unknown option: %s\n" "$1" >&2; exit 1 ;;
     *) TARGET_DIR="$1"; shift ;;
   esac
@@ -38,44 +49,118 @@ done
 
 if [ ! -d "$TARGET_DIR" ]; then fail_hard "Directory not found: $TARGET_DIR"; fi
 
-# --- Configuration ---
+# --- Dependencies & Toolchain Check ---
+SCRIPT_DIR=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
+DDS_LIST="$SCRIPT_DIR/dds-list"
+DDS_TREE="$SCRIPT_DIR/dds-tree"
+
+# Проверяем наличие и права на выполнение (+x)
+for tool in "$DDS_LIST" "$DDS_TREE"; do
+  if [ ! -x "$tool" ]; then
+    fail_hard "Toolchain broken: '$(basename "$tool")' is missing or not executable."
+  fi
+done
+
+# ==============================================================================
+# PHASE 1: GLOBAL STRUCTURAL CHECK
+# ==============================================================================
+
 SPECS_DIR="${TARGET_DIR%/}/dds/specs"
 
-# --- Check 1: Root Structure ---
+# 1.1 Root Existence
 if [ ! -d "$SPECS_DIR" ]; then
   fail_hard "Missing mandatory directory: 'dds/specs'."
 fi
 
-# --- Check 2: Manifest Singleton ---
-# Find files starting with __ inside dds/specs (non-recursive)
+# 1.2 Manifest Singleton
 root_manifests=$(find "$SPECS_DIR" -maxdepth 1 -name "__*.spec.md")
-root_count=$(echo "$root_manifests" | grep -c .)
 
-if [ "$root_manifests" = "" ]; then root_count=0; fi
+if [ -z "$root_manifests" ]; then 
+  root_count=0
+else
+  root_count=$(echo "$root_manifests" | wc -l)
+fi
 
 if [ "$root_count" -eq 0 ]; then
-  fail_hard "No Manifest found in '$SPECS_DIR'. (Expected file matching '__*.spec.md')"
+  fail_hard "No Manifest found in '$SPECS_DIR'. (Expected '__*.spec.md')"
 elif [ "$root_count" -gt 1 ]; then
-  printf "[FAIL] Multiple Manifests found in root (Must be exactly one):\n" >&2
+  printf "[FAIL] Multiple Manifests found in root:\n" >&2
   printf "%s\n" "$root_manifests" | sed 's/^/  - /' >&2
   exit 1
 fi
 
-# --- Check 3: Deep Manifests (Forbidden) ---
-# Manifest must act as Root. Manifests in subdirs are confusing.
+# 1.3 Deep Manifests (Запрет на вложенность Манифестов)
 deep_manifests=$(find "$SPECS_DIR" -mindepth 2 -name "__*.spec.md")
 if [ -n "$deep_manifests" ]; then
-  printf "[FAIL] Manifests found in subdirectories (Allowed only in dds/specs root):\n" >&2
+  printf "[FAIL] Manifests found in subdirectories (Forbidden):\n" >&2
   printf "%s\n" "$deep_manifests" | sed 's/^/  - /' >&2
   exit 1
 fi
 
-# --- Check 4: Extension Hygiene ---
-invalid_files=$(find "$SPECS_DIR" -type f ! -name "*.spec.md")
+# ==============================================================================
+# PHASE 2: PROJECTION CONTENT CHECK
+# ==============================================================================
 
-if [ -n "$invalid_files" ]; then
-  printf "[FAIL] Invalid files detected in 'dds/specs' (Must end in .spec.md):\n" >&2
-  printf "%s\n" "$invalid_files" | sed 's/^/  - /' >&2
+if [ -n "$VIEW_FILE" ]; then
+  file_list_raw=$("$DDS_LIST" --view "$VIEW_FILE" "$TARGET_DIR")
+else
+  file_list_raw=$("$DDS_LIST" "$TARGET_DIR")
+fi
+
+# Извлекаем пути файлов
+files_to_check=$(echo "$file_list_raw" | awk -F': ' '{print $2}')
+
+if [ -z "$files_to_check" ]; then
+  echo "Verification Passed: Project Structure OK (Empty Projection)."
+  exit 0
+fi
+
+bad_files_found=0
+
+# Сохраняем текущую директорию
+current_pwd=$(pwd)
+cd "$TARGET_DIR" || fail_hard "Cannot enter target dir"
+
+IFS='
+'
+for f in $files_to_check; do
+  
+  # --- CHECK A: INJECTION RISK ---
+  if [ -f "$f" ]; then
+    # Используем '--' перед паттерном для безопасности grep
+    if grep -qF -- "$FORBIDDEN_SIG" "$f"; then
+       printf "[FAIL] Injection Risk in: %s\n" "$f" >&2
+       grep -nF -- "$FORBIDDEN_SIG" "$f" | sed 's/^/       Line /' >&2
+       bad_files_found=1
+    fi
+  fi
+
+  # --- CHECK B: SPECIFICATION LOCATION ---
+  # Проверяем, является ли файл спецификацией
+  case "$f" in
+    *.spec.md)
+      # Если это спецификация, она ДОЛЖНА начинаться с dds/specs/
+      case "$f" in
+        dds/specs/*) 
+          # OK: Файл внутри разрешенной зоны
+          ;;
+        *)
+          # FAIL: Файл вне зоны
+          printf "[FAIL] Misplaced Specification: %s\n" "$f" >&2
+          printf "       Rule: All *.spec.md files must be inside 'dds/specs/'\n" >&2
+          bad_files_found=1
+          ;;
+      esac
+      ;;
+  esac
+
+done
+
+cd "$current_pwd"
+
+if [ "$bad_files_found" -eq 1 ]; then
+  printf "\n[CRITICAL] Issues detected in Projection files.\n" >&2
+  printf "Snapshot generation aborted.\n" >&2
   exit 1
 fi
 

@@ -1,0 +1,84 @@
+// ==========================================
+// TEST FILE FOR ARRAY REDUCTION SCRIPT
+// ==========================================
+
+// --- 1. Python / JSON Style: Integers ---
+// Ожидается: Редукция (середина вырезана)
+large_int_list = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    21, 22, 23, 24, 25, 26, 27, 28, 29, 30
+]
+
+// --- 2. C / C++ Style: Hex Dump ---
+// Ожидается: Редукция
+const unsigned char firmware_blob[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11
+};
+
+// --- 3. Scientific / Float Data (Tuple style) ---
+// Ожидается: Редукция (поддержка экспонент и минусов)
+scipy_data = (
+    -0.001, 1.5e-10, 3.1415, 2.7182, 0.0, -1.0,
+    100.0, 200.0, 300.0, 400.0, 500.0, 600.0,
+    700.0, 800.0, 900.0, 1.2E+5, 3.5f, 4.5F,
+    9.999, 8.888
+)
+
+// --- 4. Binary Literals ---
+// Ожидается: Редукция
+binary_stream = [
+    0b0000, 0b0001, 0b0010, 0b0011, 0b0100, 0b0101,
+    0b0110, 0b0111, 0b1000, 0b1001, 0b1010, 0b1011,
+    0b1100, 0b1101, 0b1110, 0b1111, 0b0000, 0b1111
+]
+
+// --- 5. String / Char Literals ---
+// Ожидается: Редукция
+keywords = [
+    "admin", "user", "guest", "root", "support",
+    "test", "dev", "prod", "stage", "local",
+    "remote", "api", "db", "cache", "log",
+    "error", "warning", "info", "debug"
+]
+
+// --- 6. Nested Arrays (2D Matrix) ---
+// Ожидается: Внутренние массивы должны редуцироваться отдельно
+matrix_2d = [
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+]
+
+// ==========================================
+// NEGATIVE TESTS (DO NOT TOUCH)
+// ==========================================
+
+// --- A. Short Arrays (Under Threshold) ---
+// Ожидается: Без изменений
+short_list = [1, 2, 3, 4, 5]
+
+// --- B. Function Calls (Code, not Data) ---
+// Ожидается: Без изменений (так как аргументы - переменные, а не литералы)
+result = calculate_sum(
+    var_a, var_b, var_c, var_d, var_e,
+    var_f, var_g, var_h, var_i, var_j,
+    var_k, var_l, var_m, var_n, var_o, var_p
+);
+
+// --- C. Mixed Code / Expressions ---
+// Ожидается: Без изменений (выражения типа i+1 не являются чистыми литералами)
+dynamic_array = [
+    i+1, i+2, i+3, i+4, i+5,
+    x*y, z/2, 100, 200, 300,
+    func(), func(), func(), func(), func(),
+    a, b, c, d, e
+];
+
+// --- D. Logic Blocks ---
+// Ожидается: Без изменений
+if ( (a > b) && (c < d) && (e == f) ) {
+    print("Do not touch logic parenthesis");
+}
