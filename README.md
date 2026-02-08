@@ -1,4 +1,4 @@
-# PDS or ISM ?
+# Projective Development Standard (PDS)
 
 ## 🌍 Languages / Языки
 
