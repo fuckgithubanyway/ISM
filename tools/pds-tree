@@ -1,0 +1,222 @@
+#!/usr/bin/env sh
+
+version="0.9"
+
+usage() {
+  cat << EOF
+PDS Tree — генератор структуры каталогов.
+
+Использование: $(basename "$0") [ОПЦИИ] [директория]
+
+Опции:
+  --all              Показывать скрытые файлы и директории (начинающиеся с '.')
+  --plain            Машинно-читаемый плоский формат
+  --exclude PATTERN  Исключить по шаблону (можно указывать несколько раз)
+                     • .git               — полностью скрыть папку
+                     • '.git/*'           — показать папку .git, но скрыть всё внутри
+                     • node_modules, '*.log', 'build*' и т.д.
+
+Примеры:
+  pds-tree --all
+  pds-tree --all --exclude .git --exclude node_modules .
+  pds-tree --all --exclude '.git/*' --exclude node_modules
+  pds-tree --plain --exclude '.git/*' ./myproject
+
+EOF
+}
+
+fail() {
+  printf "ОШИБКА: %s\n\n" "$1" >&2
+  usage
+  exit 1
+}
+
+get_link_target() {
+  _path="$1"
+  if command -v readlink >/dev/null 2>&1; then
+    readlink -- "$_path" 2>/dev/null
+  else
+    ls -ld -- "$_path" 2>/dev/null | sed 's/.* -> //'
+  fi
+}
+
+print_item() {
+  _prefix="$1"
+  _connector="$2"
+  _display_name="$3"
+  _link_suffix="$4"
+  _cycle_suffix="$5"
+  _plain="$6"
+
+  if [ "$_plain" = true ]; then
+    printf '%s%s%s\n' "$_display_name" "$_link_suffix" "$_cycle_suffix"
+  else
+    printf '%s%s%s%s%s\n' "$_prefix" "$_connector" "$_display_name" "$_link_suffix" "$_cycle_suffix"
+  fi
+}
+
+# Основная рекурсивная функция
+process_dir() (
+  _path="$1"
+  _prefix="$2"
+  _visited="$3"
+  _plain="$4"
+  _show_hidden="$5"
+  _excludes="$6"
+  _rel_path="$7"
+
+  if [ "$_show_hidden" = true ]; then
+    _items=$(find -H "$_path" -mindepth 1 -maxdepth 1 2>/dev/null | sort -f)
+  else
+    _items=$(find -H "$_path" -mindepth 1 -maxdepth 1 ! -name '.*' 2>/dev/null | sort -f)
+  fi
+
+  [ -z "$_items" ] && return
+
+  _total=$(printf '%s\n' "$_items" | wc -l)
+  _count=0
+
+  printf '%s\n' "$_items" | while IFS= read -r _fullpath; do
+    _count=$((_count + 1))
+    _name=$(basename -- "$_fullpath")
+
+    # === Проверка исключений ===
+    set -f
+    _skip=false
+    for _pat in $_excludes; do
+      # По basename
+      case "$_name" in
+        $_pat)
+          _skip=true
+          break
+          ;;
+      esac
+
+      # По относительному пути (для .git/* и т.п.)
+      if [ "${_pat#*/*}" != "$_pat" ]; then
+        _current_rel="${_rel_path:+$_rel_path/}$_name"
+        _current_rel="${_current_rel#./}"
+        case "$_current_rel" in
+          $_pat)
+            _skip=true
+            break
+            ;;
+        esac
+      fi
+    done
+    set +f
+
+    [ "$_skip" = true ] && continue
+
+    _is_dir=false; [ -d "$_fullpath" ] && _is_dir=true
+    _is_link=false; [ -L "$_fullpath" ] && _is_link=true
+
+    _is_cycle=false
+    _inode=""
+
+    if [ "$_is_dir" = true ]; then
+      _inode=$(ls -idL -- "$_fullpath" 2>/dev/null | awk '{print $1}')
+
+      for _vis in $_visited; do
+        if [ "$_vis" = "$_inode" ]; then
+          _is_cycle=true
+          break
+        fi
+      done
+
+      if [ "$_is_cycle" = false ] && [ "$_is_link" = true ]; then
+        _target_dir=$(cd -P -- "$_fullpath" 2>/dev/null && pwd)
+        _current_dir=$(cd -P -- "$_path" 2>/dev/null && pwd)
+        if [ -n "$_target_dir" ] && [ -n "$_current_dir" ]; then
+          case "$_current_dir/" in
+            "$_target_dir/"*) _is_cycle=true ;;
+          esac
+        fi
+      fi
+    fi
+
+    _link_suffix=""
+    if [ "$_is_link" = true ]; then
+      _target=$(get_link_target "$_fullpath")
+      [ "$_is_dir" = true ] && _target="${_target%/}/"
+      _link_suffix=" -> $_target"
+    fi
+
+    _cycle_suffix=""
+    [ "$_is_cycle" = true ] && _cycle_suffix=" [цикл]"
+
+    if [ "$_plain" = true ]; then
+      _display=$(printf '%s' "$_fullpath" | sed 's|^\./||')
+      [ "$_is_dir" = true ] && _display="${_display%/}/"
+    else
+      _display="$_name"
+      [ "$_is_dir" = true ] && _display="$_name/"
+    fi
+
+    if [ "$_count" -eq "$_total" ]; then
+      _conn="└── "
+      _new_prefix="${_prefix}    "
+    else
+      _conn="├── "
+      _new_prefix="${_prefix}│   "
+    fi
+
+    print_item "$_prefix" "$_conn" "$_display" "$_link_suffix" "$_cycle_suffix" "$_plain"
+
+    if [ "$_is_dir" = true ] && [ "$_is_cycle" = false ]; then
+      _next_prefix=""
+      [ "$_plain" = false ] && _next_prefix="$_new_prefix"
+      
+      _next_rel="${_rel_path:+$_rel_path/}$_name"
+      process_dir "$_fullpath" "$_next_prefix" "$_visited $_inode" "$_plain" "$_show_hidden" "$_excludes" "$_next_rel"
+    fi
+  done
+)
+
+# ====================== MAIN ======================
+
+show_hidden=false
+plain_mode=false
+exclude_patterns=""
+target="."
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --all)             show_hidden=true; shift ;;
+    --plain)           plain_mode=true;  shift ;;
+    --exclude)
+      [ $# -lt 2 ] || [ -z "$2" ] && fail "Опция --exclude требует аргумент PATTERN"
+      exclude_patterns="${exclude_patterns:+$exclude_patterns }$2"
+      shift 2
+      ;;
+    --help)            usage; exit 0 ;;
+    --version)         echo "pds-tree $version"; exit 0 ;;
+    -*)                fail "Неизвестная опция '$1'. Используйте только длинные опции (--all, --plain, --exclude и т.д.)" ;;
+    *)
+      [ -n "$target" ] && [ "$target" != "." ] && fail "Можно указать только одну директорию"
+      target="$1"
+      shift
+      ;;
+  esac
+done
+
+if ! [ -e "$target" ]; then
+  fail "Путь '$target' не существует"
+fi
+
+# Нормализация корня
+if [ "$target" = "." ] || [ "$target" = "./" ]; then
+  root_display="."
+elif [ -d "$target" ] && [ "$plain_mode" = true ]; then
+  root_display="${target%/}/"
+else
+  root_display="${target%/}"
+fi
+
+printf '%s\n' "$root_display"
+
+if [ -d "$target" ]; then
+  clean_target=$(printf '%s' "$target" | sed 's|/*$||')
+  root_inode=$(ls -idL -- "$clean_target" 2>/dev/null | awk '{print $1}')
+  process_dir "$clean_target" "" "$root_inode" "$plain_mode" "$show_hidden" "$exclude_patterns" ""
+fi

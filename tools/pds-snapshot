@@ -1,0 +1,171 @@
+#!/usr/bin/env sh
+
+version="0.9"
+
+usage() {
+  cat << EOF
+PDS Snapshot — генератор единого текстового снимка директории.
+
+Использование: $(basename "$0") [ОПЦИИ] [директория]
+
+Опции:
+  --all                  Включать скрытые файлы и директории (начинающиеся с '.')
+  --exclude PATTERN      Исключить по шаблону (можно указывать несколько раз)
+  --output FILE          Записать снимок в файл вместо stdout
+  --help                 Показать эту справку
+  --version              Показать версию
+
+Примеры:
+  pds-snapshot .
+  pds-snapshot --all --exclude .git --exclude node_modules ./myproject
+  pds-snapshot --output snapshot.txt .
+EOF
+}
+
+fail() {
+  printf '%s\n\n' "ОШИБКА: $1" >&2
+  usage
+  exit 1
+}
+
+is_binary_file() {
+  _f="$1"
+  [ ! -f "$_f" ] && return 1
+
+  if command -v od >/dev/null 2>&1; then
+    od -An -tx1 -N 1024 -- "$_f" 2>/dev/null | grep -q ' 00'
+  else
+    head -c 1024 -- "$_f" 2>/dev/null | grep -q "$(printf '\000')"
+  fi
+}
+
+# Размер с единицей измерения
+get_file_size() {
+  _size=$(ls -lh -- "$1" 2>/dev/null | awk '{print $5}')
+  case "$_size" in
+    *[!0-9.]*) printf '%s' "$_size" ;;   # уже есть K/M/G/T
+    *)         printf '%sB' "$_size" ;;  # только число → добавляем B
+  esac
+}
+
+# Получаем описание файла (только если утилита file доступна)
+get_file_description() {
+  if command -v file >/dev/null 2>&1; then
+    file -b -- "$1" 2>/dev/null | sed 's/^ *//'
+  fi
+}
+
+print_header() {
+  printf '%s\n' "---- PDS: $1 ----"
+}
+
+# ====================== MAIN ======================
+
+show_hidden=false
+output_file=""
+exclude_patterns=""
+target_dir="."
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --all)           show_hidden=true; shift ;;
+    --exclude)
+      [ $# -lt 2 ] || [ -z "$2" ] && fail "--exclude требует аргумент PATTERN"
+      exclude_patterns="${exclude_patterns:+$exclude_patterns }$2"
+      shift 2
+      ;;
+    --output)
+      [ $# -lt 2 ] || [ -z "$2" ] && fail "--output требует аргумент FILE"
+      output_file="$2"
+      shift 2
+      ;;
+    --help)          usage; exit 0 ;;
+    --version)       printf '%s\n' "pds-snapshot $version"; exit 0 ;;
+    -*)              fail "Неизвестная опция '$1'. Используйте только длинные опции." ;;
+    *)
+      [ "$target_dir" != "." ] && fail "Можно указать только одну директорию"
+      target_dir="$1"
+      shift
+      ;;
+  esac
+done
+
+[ ! -d "$target_dir" ] && fail "Директория '$target_dir' не найдена"
+
+SCRIPT_DIR=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
+PDS_TREE="$SCRIPT_DIR/pds-tree"
+[ ! -x "$PDS_TREE" ] && fail "pds-tree не найден в $SCRIPT_DIR"
+
+T_TREE="${TMPDIR:-/tmp}/pds_snap_tree_$$"
+
+cleanup() { rm -f "$T_TREE" 2>/dev/null; }
+trap cleanup EXIT
+
+# Генерация структуры
+(
+  cd -- "$target_dir" || fail "Не удалось перейти в директорию"
+  set -- --plain
+  [ "$show_hidden" = true ] && set -- "$@" --all
+
+  for pat in $exclude_patterns; do
+    set -- "$@" --exclude "$pat"
+  done
+
+  set -- "$@" "."
+  exec "$PDS_TREE" "$@"
+) > "$T_TREE" || fail "Ошибка генерации структуры"
+
+generate_snapshot() {
+  print_header "SNAPSHOT BEGIN"
+  printf 'Директория: %s\n' "$(cd -- "$target_dir" && pwd)"
+  printf 'Дата: %s\n\n' "$(date '+%Y-%m-%d %H:%M:%S %z' 2>/dev/null || date '+%Y-%m-%d %H:%M:%S')"
+
+  print_header "PROJECT STRUCTURE"
+  cat "$T_TREE"
+  printf '\n'
+
+  tail -n +2 "$T_TREE" 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      */)       continue ;;
+      *' -> '*) continue ;;
+      *)
+        rel_path="$line"
+        full_path="$target_dir/$rel_path"
+
+        if [ -f "$full_path" ]; then
+          file_size=$(get_file_size "$full_path")
+
+          if [ ! -s "$full_path" ]; then
+            printf '%s\n\n' "---- PDS: EMPTY FILE $rel_path (size: 0B) ----"
+
+          elif is_binary_file "$full_path"; then
+            printf '%s\n' "---- PDS: BINARY FILE $rel_path (size: $file_size) ----"
+            
+            file_desc=$(get_file_description "$full_path")
+            if [ -n "$file_desc" ]; then
+              printf '%s\n' "$file_desc"
+            fi
+            printf '\n\n'
+
+          else
+            printf '%s\n' "---- PDS: CONTENT OF $rel_path (size: $file_size) ----"
+            cat -- "$full_path"
+            printf '\n\n'
+          fi
+        fi
+        ;;
+    esac
+  done
+
+  print_header "SNAPSHOT END"
+}
+
+if [ -n "$output_file" ]; then
+  if generate_snapshot > "$output_file"; then
+    printf 'Снимок успешно сохранён: %s\n' "$output_file" >&2
+  else
+    fail "Не удалось записать в $output_file"
+  fi
+else
+  generate_snapshot
+fi
