@@ -1,4 +1,4 @@
-# Projective Development Standard (PDS)
+# Isomorphic Specification Methodology (ISM)
 
 ## 🌍 Languages / Языки
 

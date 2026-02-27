@@ -4,7 +4,8 @@ version="0.9"
 
 usage() {
   cat << EOF
-PDS Tree — генератор структуры каталогов.
+ISM Tree — генератор структуры каталогов.
+Версия: $version
 
 Использование: $(basename "$0") [ОПЦИИ] [директория]
 
@@ -17,10 +18,10 @@ PDS Tree — генератор структуры каталогов.
                      • node_modules, '*.log', 'build*' и т.д.
 
 Примеры:
-  pds-tree --all
-  pds-tree --all --exclude .git --exclude node_modules .
-  pds-tree --all --exclude '.git/*' --exclude node_modules
-  pds-tree --plain --exclude '.git/*' ./myproject
+  ism-tree --all
+  ism-tree --all --exclude .git --exclude node_modules .
+  ism-tree --all --exclude '.git/*' --exclude node_modules
+  ism-tree --plain --exclude '.git/*' ./myproject
 
 EOF
 }
@@ -190,7 +191,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --help)            usage; exit 0 ;;
-    --version)         echo "pds-tree $version"; exit 0 ;;
+    --version)         echo "ism-tree $version"; exit 0 ;;
     -*)                fail "Неизвестная опция '$1'. Используйте только длинные опции (--all, --plain, --exclude и т.д.)" ;;
     *)
       [ -n "$target" ] && [ "$target" != "." ] && fail "Можно указать только одну директорию"

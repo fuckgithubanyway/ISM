@@ -4,7 +4,8 @@ version="0.9"
 
 usage() {
   cat << EOF
-PDS Snapshot — генератор единого текстового снимка директории.
+ISM Snapshot — генератор единого текстового снимка директории.
+Версия: $version
 
 Использование: $(basename "$0") [ОПЦИИ] [директория]
 
@@ -16,9 +17,9 @@ PDS Snapshot — генератор единого текстового сним
   --version              Показать версию
 
 Примеры:
-  pds-snapshot .
-  pds-snapshot --all --exclude .git --exclude node_modules ./myproject
-  pds-snapshot --output snapshot.txt .
+  ism-snapshot .
+  ism-snapshot --all --exclude .git --exclude node_modules ./myproject
+  ism-snapshot --output snapshot.txt .
 EOF
 }
 
@@ -56,7 +57,7 @@ get_file_description() {
 }
 
 print_header() {
-  printf '%s\n' "---- PDS: $1 ----"
+  printf '%s\n' "---- ISM: $1 ----"
 }
 
 # ====================== MAIN ======================
@@ -80,7 +81,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --help)          usage; exit 0 ;;
-    --version)       printf '%s\n' "pds-snapshot $version"; exit 0 ;;
+    --version)       printf '%s\n' "ism-snapshot $version"; exit 0 ;;
     -*)              fail "Неизвестная опция '$1'. Используйте только длинные опции." ;;
     *)
       [ "$target_dir" != "." ] && fail "Можно указать только одну директорию"
@@ -93,10 +94,10 @@ done
 [ ! -d "$target_dir" ] && fail "Директория '$target_dir' не найдена"
 
 SCRIPT_DIR=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
-PDS_TREE="$SCRIPT_DIR/pds-tree"
-[ ! -x "$PDS_TREE" ] && fail "pds-tree не найден в $SCRIPT_DIR"
+ISM_TREE="$SCRIPT_DIR/ism-tree"
+[ ! -x "$ISM_TREE" ] && fail "ism-tree не найден в $SCRIPT_DIR"
 
-T_TREE="${TMPDIR:-/tmp}/pds_snap_tree_$$"
+T_TREE="${TMPDIR:-/tmp}/ism_snap_tree_$$"
 
 cleanup() { rm -f "$T_TREE" 2>/dev/null; }
 trap cleanup EXIT
@@ -112,7 +113,7 @@ trap cleanup EXIT
   done
 
   set -- "$@" "."
-  exec "$PDS_TREE" "$@"
+  exec "$ISM_TREE" "$@"
 ) > "$T_TREE" || fail "Ошибка генерации структуры"
 
 generate_snapshot() {
@@ -136,10 +137,10 @@ generate_snapshot() {
           file_size=$(get_file_size "$full_path")
 
           if [ ! -s "$full_path" ]; then
-            printf '%s\n\n' "---- PDS: EMPTY FILE $rel_path (size: 0B) ----"
+            printf '%s\n\n' "---- ISM: EMPTY FILE $rel_path (size: 0B) ----"
 
           elif is_binary_file "$full_path"; then
-            printf '%s\n' "---- PDS: BINARY FILE $rel_path (size: $file_size) ----"
+            printf '%s\n' "---- ISM: BINARY FILE $rel_path (size: $file_size) ----"
             
             file_desc=$(get_file_description "$full_path")
             if [ -n "$file_desc" ]; then
@@ -148,7 +149,7 @@ generate_snapshot() {
             printf '\n\n'
 
           else
-            printf '%s\n' "---- PDS: CONTENT OF $rel_path (size: $file_size) ----"
+            printf '%s\n' "---- ISM: CONTENT OF $rel_path (size: $file_size) ----"
             cat -- "$full_path"
             printf '\n\n'
           fi
