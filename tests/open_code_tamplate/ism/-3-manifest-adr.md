@@ -1,0 +1,1 @@
+../../../ru/ism/-3-manifest-adr.md
