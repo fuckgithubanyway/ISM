@@ -70,6 +70,5 @@ The detailed formalization of the methodology is described in the Manifests loca
 
 ---
 
-*License: [WTFPL](../LICENSE)*
 *[⬅️ Back to language selection](../README.md)*
 
