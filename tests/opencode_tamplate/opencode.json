@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "architect",
+  "instructions": [
+    "ism/-0-manifest-core.md",
+    "ism/-1-manifest-topology.md",
+    "ism/-2-manifest-workflow.md",
+    "ism/-3-manifest-adr.md"
+  ]
+}
