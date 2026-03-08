@@ -119,7 +119,7 @@ trap cleanup EXIT
 generate_snapshot() {
   print_header "SNAPSHOT BEGIN"
   printf 'Директория: %s\n' "$(cd -- "$target_dir" && pwd)"
-  printf 'Дата: %s\n\n' "$(date '+%Y-%m-%d %H:%M:%S %z' 2>/dev/null || date '+%Y-%m-%d %H:%M:%S')"
+  printf 'Дата: %s\n\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date '+%Y-%m-%d %H:%M:%S')"
 
   print_header "PROJECT STRUCTURE"
   cat "$T_TREE"
