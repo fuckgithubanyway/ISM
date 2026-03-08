@@ -1,6 +1,6 @@
 # ISM Manifest: Core Axioms & Definitions
 
-**Version:** 0.5
+**Version:** 0.6
 **Language:** English
 
 
@@ -17,6 +17,10 @@
 *   **Projection Zone:** The project root directory `[root]/` and all its subdirectories, excluding the Definition Zone `[root]/ism/`. Contains artifacts that are transient projections of the Definition Zone.
 
 *   **ADR (Architectural Decision Record):** A specification attribute (tag `@ADR:`), increasing the priority of the accompanying text. Serves as protection against accidental refactoring of justified but non-obvious decisions.
+
+*   **Semantic Spec:** A specification with the `-spec-` prefix and `*.md` extension. Describes the Intent and logic of the module. Priority of Meaning ("What and Why").
+
+*   **Syntactic Spec:** A specification with the `-spec-` prefix and a code extension (`*.ts`, `*.json`, etc.). Contains immutable form injections (Form). Priority of Form ("How exactly").
 
 
 ## Axioms
@@ -43,5 +47,5 @@ The ISM-Agent manages only those artifacts that are explicitly (or implicitly) r
 
 ### Jurisdiction Principle
 Artifact management in ISM is based on topological jurisdiction:
-*   **Managed Zones:** Any directory in the Projection Zone (`[root]/`) having a mirrored directory in the Definition Zone (`[root]/ism/`) is under the strict jurisdiction of the ISM-Agent. Artifacts in such a zone are defined through the corresponding Specification (specifically via Functional or Implementation Specification, or indirectly via Meta-Specification). The presence of "orphan" files in this zone is qualified as Drift.
+*   **Managed Zones:** Any directory in the Projection Zone (`[root]/`) having a mirrored directory in the Definition Zone (`[root]/ism/`) is under the strict jurisdiction of the ISM-Agent. Artifacts in such a zone are defined through the corresponding Specification (Semantic or Syntactic) or indirectly via Meta-Specification. The presence of "orphan" files in this zone is qualified as Drift.
 *   **Unmanaged Zones:** Any directory in the Projection Zone (`[root]/`) for which no mirror has been created in the Definition Zone (`[root]/ism/`) is outside jurisdiction. The ISM-Agent completely ignores the contents of such directories during any operations.

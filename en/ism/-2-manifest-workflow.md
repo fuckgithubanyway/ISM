@@ -1,6 +1,6 @@
 # ISM Manifest: Workflows & Protocols
 
-**Version:** 0.5
+**Version:** 0.6
 **Language:** English
 
 
@@ -10,10 +10,10 @@ When contradictions (Collisions) arise, the source with the highest priority is 
 
 1.  **Manifest** (Methodological foundation).
 2.  **Meta-Specification** (Considering nesting).
-3.  **Functional Specification** and **Implementation Specification**.
+3.  **Syntactic Specification** and **Semantic Specification**.
 4.  **User Intent** (Request within the current session).
 
-*   **Note:** Functional Specification has semantic priority, Implementation Specification has syntax preservation priority (Immutable). Conflict requires manual user resolution.
+*   **Note:** Syntactic Specification (`.ext`) takes priority over Semantic Specification (`.md`) for specific code blocks (Specific overrides General). Conflict requires manual user resolution.
 
 *@ADR: The highest priority of the Manifest guarantees that the ISM-Agent cannot violate ISM methodological principles (e.g., change logic bypassing the specification) even upon a direct user request.
 

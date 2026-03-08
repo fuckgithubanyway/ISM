@@ -1,6 +1,6 @@
 # ISM Manifest: Topology & Artifacts
 
-**Version:** 0.5
+**Version:** 0.6
 **Language:** English
 
 
@@ -8,25 +8,26 @@
 
 Files in the Definition Zone follow a strict syntax, ensuring specification type parsing and sort order management.
 
-**Pattern:** `-[order-][type]-[name].[ext]`
+**Pattern:** `-[order-]spec-[name].[ext]`
 
-*@ADR: The names of Functional Specifications and Implementation Specifications are exact pointers to the generated file.
+*@ADR: The names of Unit Specifications are exact pointers to the generated file.
 
 ### Name Components:
 *   **prefix `-`**: Mandatory first character. Denotes the file's belonging to the ISM methodology.
 *   **order (Optional sequence number)**: A numeric index in an arbitrary format (e.g., `0`, `01`, `2`, `10`, `99`, etc.). Used for forced file sorting.
-    *   *Example:* File `-1-func-auth.md` will be processed or displayed before `-2-func-user.md`.
-    *   *Note:* The ISM-Agent considers this order when generating documentation, but the rule application priority (Manifest > Meta > Func/Impl) remains unchanged, regardless of the number.
-*   **type (Mandatory type tag)**: Keyword defining the artifact role (`manifest`, `meta`, `func`, `impl`).
-*   **name (Optional identifier)**: Semantic module identifier. Anonymous Manifests and Meta-Specifications are allowed. However, anonymous Functional Specifications and Implementation Specifications are not allowed, as this would violate the Isomorphism principle.
-*   **ext (Mandatory extension)**: For example, `.md` for Meta and Functional Specifications and Manifests, or `.ts`, `.js`, `.css`, `.json`, etc. for Implementation Specifications.
+    *   *Example:* File `-1-spec-auth.md` will be processed or displayed before `-2-spec-user.md`.
+    *   *Note:* The ISM-Agent considers this order when generating documentation, but the rule application priority (Manifest > Meta > Spec) remains unchanged, regardless of the number.
+*   **spec (Mandatory type tag)**: The keyword `spec`, a marker for a target specification (Semantic or Syntactic).
+*   **name (Mandatory identifier)**: Semantic module identifier.
+*   **ext (Mandatory extension)**: Determines the Specification subtype: `.md` for Semantic Specification, or code extension (`.ts`, `.js`, `.css`, `.json`, etc.) for Syntactic Specification.
 
 ### Valid Name Examples:
 *   `-0-manifest-core.md` (Manifest with highest sort priority)
 *   `-1-manifest-topology.md` (Manifest with a sequence number)
 *   `-meta-.md` (Anonymous Meta-Specification without a number)
-*   `-func-logger.md` (Specification without a number)
-*   `-impl-utils.ts` (Implementation Specification for a TypeScript file)
+*   `-spec-auth.md` (Semantic Specification of the auth module)
+*   `-spec-auth.ts` (Syntactic Specification of the auth module for TypeScript)
+*   `-spec-utils.json` (Syntactic Specification for configuration)
 
 
 ## Structural Isomorphism
@@ -52,14 +53,22 @@ The structure of the Definition Zone mirrors the structure of the entire project
 *   **Note:** Avoid excessive nesting of overloading Meta-Specifications to optimize context.
 *@ADR: Cascading inheritance of Meta-Specifications allows defining local technological exceptions without complicating global project rules.
 
-### Functional Specification (`-[order-]func-[name].md`)
-*   **Relation:** 1 to 1. **One** Functional Specification describes the semantics of **one** target Artifact.
+### Semantic Specification (`-[order-]spec-[name].md`)
+*   **Relation:** 1 to 1. Describes the semantics of **one** target Artifact.
 *   **Location:** Any directory in the Definition Zone `[root]/ism/`. Isomorphic to the target Artifact.
-*   **Artifact Naming:** The generated file name is inherited from the specification's `[name]`. The extension and type of the target Artifact are determined from the context (Meta-Specification, content of the Functional Specification itself, etc.).
-*   **Role:** Description of business logic, behavior, data contracts, etc.
+*   **Artifact Naming:** The generated file name is inherited from `[name]`. The extension and type are determined from the context.
+*   **Priority:** Meaning (Intent).
+*   **Content:** Describes "What and Why" — business logic, behavior, data contracts, developer intentions. The ISM-Agent translates this logic into executable code.
 
-### Implementation Specification (`-[order-]impl-[name].[ext]`)
-*   **Relation:** 1 to 1. **One** Implementation Specification contains immutable text (code) blocks for **one** target Artifact in its specific implementation (`.[ext]`). Multiple `-impl-` files with the same `[name]` but different extensions (e.g., `-impl-main.c` and `-impl-main.js`) are allowed to ensure cross-platform polymorphism. The ISM-Agent selects the required file based on the current target context (Target Stack).
+### Syntactic Specification (`-[order-]spec-[name].[ext]`)
+*   **Relation:** 1 to 1. Describes the form of **one** target Artifact.
 *   **Location:** Any directory in the Definition Zone `[root]/ism/`. Isomorphic to the target Artifact.
-*   **Role:** A set of text blocks used as syntactic injections (analogous to Assembly inserts in C). Fragments of text (code) that the ISM-Agent is obliged to transfer to the target Artifact `[name]` "as is".
-*   **Format:** A source file in the target format (`.[ext]`) containing text or code blocks (structures, functions, separate expressions, algorithms, etc.) accompanied by explanatory comments. Any text (code) that is **not** a comment has `Immutable` status. This is a direct syntactic injection. The ISM-Agent is obliged to transfer such text (code) to the target Artifact in the Projection Zone verbatim, without any modifications. Any text formatted as a comment in the target language (e.g., `//`, `/* */`, `#`, depending on the language) is treated by the ISM-Agent as an explanatory instruction describing the purpose of the associated block, its business logic, etc.
+*   **Artifact Naming:** The name and extension of the target file exactly match the `[name]` and `[ext]` of the specification.
+*   **Priority:** Form.
+*   **Content:** Contains immutable text (code) blocks — Immutable Code Injection.
+*   **Role:** Code fragments that the ISM-Agent must transfer to the target Artifact "as is", without modifications.
+*   **Format:** Source file in the target format containing code blocks. Any code outside comments has `Immutable` status. Comments are treated as explanatory instructions.
+
+### Complementarity of Specifications
+
+Semantic (`.md`) and Syntactic (`.ext`) specifications with the same `[name]` are not mutually exclusive. They can exist in the same directory simultaneously, forming a single hybrid context for generating one target Artifact (where `.md` sets the overarching logic, and `.ext` provides exact code blocks). Priority resolution rules for their combined use are described in the Workflow manifest.

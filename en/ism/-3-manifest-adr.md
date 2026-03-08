@@ -1,6 +1,6 @@
 # ISM Manifest: Architectural Decision Records (ADR)
 
-**Version:** 0.5
+**Version:** 0.6
 **Language:** English
 
 
@@ -22,16 +22,20 @@ The **Semantic Anchoring** mechanism is used.
 
 ## Application
 
-### In Code (Native Specs)
+### In Syntactic Specifications (`.ext`)
 ADR is formatted as a comment immediately preceding the code block to which it refers.
 
 `# @ADR: Using UDP instead of TCP because packet loss is acceptable, but latency is critical.`
 `socket = new UdpSocket();`
 
-### In Documentation (Markdown Specs)
+ADR in a Syntactic Specification protects the specific code implementation.
+
+### In Semantic Specifications (`.md`)
 ADR is formatted as a highlighted block (Blockquote) or a separate paragraph.
 
 `*@ADR: Transaction limit is restricted to 1000 units/sec due to bandwidth limitations of the partner's legacy gateway.`
+
+ADR in a Semantic Specification protects the architectural logic.
 
 
 ## Principles
@@ -46,4 +50,4 @@ ADR is formatted as a highlighted block (Blockquote) or a separate paragraph.
 
 *   **Protection during Reconciliation:** Text marked with the `@ADR:` tag is inviolable for automatic edits by the ISM-Agent. If changes in the Projection code contradict an existing ADR, the ISM-Agent is obliged to interrupt the Reconciliation procedure and request User intervention.
 
-*   **Protection Separation:** An ADR must protect the architectural decision, not the syntactic implementation. The ISM-Agent has the right to rewrite code under an ADR if the syntax change does not violate the logic described in the tag. (If rigid syntax fixation is required, an Implementation Specification is used).
+*   **Protection Separation:** An ADR must protect the architectural decision, not the syntactic implementation. The ISM-Agent has the right to rewrite code under an ADR if the syntax change does not violate the logic described in the tag. (If rigid syntax fixation is required, a Syntactic Specification is used).
