@@ -1,74 +1,90 @@
-# ISM Manifest: Topology & Artifacts
+# ISM Manifest: Topology
 
-**Version:** 0.6
-**Language:** English
+**Version:** 0.7  
+**Status:** Translation of the canonical Russian normative text
 
+## Names
 
-## Naming Convention
+ISM file forms:
 
-Files in the Definition Zone follow a strict syntax, ensuring specification type parsing and sort order management.
+```text
+-[order-]manifest-[name].md
+-[order-]meta-[name].md
+-[order-]spec-[target].md
+-[order-]exact-[target]
+```
 
-**Pattern:** `-[order-]spec-[name].[ext]`
+`order` is an optional non-negative integer. It controls canonical reading and display order only; semantic priority never depends on `order`.
 
-*@ADR: The names of Unit Specifications are exact pointers to the generated file.
+Canonical order inside a directory:
 
-### Name Components:
-*   **prefix `-`**: Mandatory first character. Denotes the file's belonging to the ISM methodology.
-*   **order (Optional sequence number)**: A numeric index in an arbitrary format (e.g., `0`, `01`, `2`, `10`, `99`, etc.). Used for forced file sorting.
-    *   *Example:* File `-1-spec-auth.md` will be processed or displayed before `-2-spec-user.md`.
-    *   *Note:* The ISM-Agent considers this order when generating documentation, but the rule application priority (Manifest > Meta > Spec) remains unchanged, regardless of the number.
-*   **spec (Mandatory type tag)**: The keyword `spec`, a marker for a target specification (Semantic or Syntactic).
-*   **name (Mandatory identifier)**: Semantic module identifier.
-*   **ext (Mandatory extension)**: Determines the Specification subtype: `.md` for Semantic Specification, or code extension (`.ts`, `.js`, `.css`, `.json`, etc.) for Syntactic Specification.
+1. files with `order`, by numeric `order`;
+2. then files without `order`;
+3. ties by filename.
 
-### Valid Name Examples:
-*   `-0-manifest-core.md` (Manifest with highest sort priority)
-*   `-1-manifest-topology.md` (Manifest with a sequence number)
-*   `-meta-.md` (Anonymous Meta-Specification without a number)
-*   `-spec-auth.md` (Semantic Specification of the auth module)
-*   `-spec-auth.ts` (Syntactic Specification of the auth module for TypeScript)
-*   `-spec-utils.json` (Syntactic Specification for configuration)
+`target` is the full Target filename including its extension.
 
+Examples:
 
-## Structural Isomorphism
+```text
+-10-spec-login.ts.md  -> login.ts
+-20-exact-login.ts    -> login.ts
+-spec-README.md.md    -> README.md
+-exact-README.md      -> README.md
+```
 
-The structure of the Definition Zone mirrors the structure of the entire project relative to the root. The path `[root]/ism/foo/bar` defines the path to the artifact `[root]/foo/bar` (or a group of related artifacts).
+## Definition Zone
 
-*@ADR: Mirroring the entire root `[root]/`, rather than just the source code folder, was chosen to ensure unified management of the entire project via a single semantic protocol.
+`[root]/ism/` is the Root Definition Zone. It is required and contains the project's Manifest Set.
 
-*@ADR: Duplicating the file structure (Isomorphism) is a conscious compromise. Synchronization costs are outweighed by the ability to independently translate the ISM project into different technology stacks without changing the Definition Zone.
+Any `<scope>/ism/` outside another Definition Zone is a Local Definition Zone for `<scope>`. A Definition Zone cannot exist inside another Definition Zone.
 
+For Definition Zone `D = <scope>/ism/`:
 
-## Specification Classification
+```text
+D/<path>/...  <->  <scope>/<path>/...
+```
 
-### Manifest (`-[order-]manifest-[name].md`)
-*   **Location:** Only root `[root]/ism/`.
-*   **Role:** Definition of the methodology and its global laws.
+A Definition Zone provides coordinates. Only a Spec provides Target ownership.
 
-### Meta-Specification (`-[order-]meta-[name].md`)
-*   **Relation:** 1 to N. **One** Meta-Specification can introduce rules for **many** Artifacts.
-*   **Location:** Any directory in the Definition Zone `[root]/ism/`.
-*   **Role:** Setting generation rules, technology stack, architectural patterns, business context, etc., for multiple files. Acts at the directory level.
-*   **Scope:** Rules of Meta-Specifications cascade to the current directory and all nested subdirectories. In case of conflict, the specification with the maximum nesting depth (closest to the target file) takes priority.
-*   **Note:** Avoid excessive nesting of overloading Meta-Specifications to optimize context.
-*@ADR: Cascading inheritance of Meta-Specifications allows defining local technological exceptions without complicating global project rules.
+Symbolic links never extend ISM scope beyond Project Root and must not be used to traverse external directories.
 
-### Semantic Specification (`-[order-]spec-[name].md`)
-*   **Relation:** 1 to 1. Describes the semantics of **one** target Artifact.
-*   **Location:** Any directory in the Definition Zone `[root]/ism/`. Isomorphic to the target Artifact.
-*   **Artifact Naming:** The generated file name is inherited from `[name]`. The extension and type are determined from the context.
-*   **Priority:** Meaning (Intent).
-*   **Content:** Describes "What and Why" — business logic, behavior, data contracts, developer intentions. The ISM-Agent translates this logic into executable code.
+## Manifest
 
-### Syntactic Specification (`-[order-]spec-[name].[ext]`)
-*   **Relation:** 1 to 1. Describes the form of **one** target Artifact.
-*   **Location:** Any directory in the Definition Zone `[root]/ism/`. Isomorphic to the target Artifact.
-*   **Artifact Naming:** The name and extension of the target file exactly match the `[name]` and `[ext]` of the specification.
-*   **Priority:** Form.
-*   **Content:** Contains immutable text (code) blocks — Immutable Code Injection.
-*   **Role:** Code fragments that the ISM-Agent must transfer to the target Artifact "as is", without modifications.
-*   **Format:** Source file in the target format containing code blocks. Any code outside comments has `Immutable` status. Comments are treated as explanatory instructions.
+Manifest files are allowed only directly in the Root Definition Zone.
 
-### Complementarity of Specifications
+All `manifest` files form the **Manifest Set**. Their count is unrestricted. Together they define the project's ISM protocol.
 
-Semantic (`.md`) and Syntactic (`.ext`) specifications with the same `[name]` are not mutually exclusive. They can exist in the same directory simultaneously, forming a single hybrid context for generating one target Artifact (where `.md` sets the overarching logic, and `.ext` provides exact code blocks). Priority resolution rules for their combined use are described in the Workflow manifest.
+The Manifest Set is read-only during normal project operations. Changing it is an ISM upgrade.
+
+## Meta
+
+Meta defines rules for the corresponding Projection directory and its descendants.
+
+All Meta files mapped to one scope form a **Meta Set**. Their count is unrestricted.
+
+For a Target, Meta applies from general scope to specific scope. More-specific Meta overrides less-specific Meta. Incompatible Meta within the same scope is a Collision.
+
+Meta never creates a Managed Target.
+
+## Semantic Spec
+
+`-[order-]spec-[target].md` defines the required meaning of one Target: behavior, constraints, contracts, and intent.
+
+At most one Semantic Spec may map to a Target across all Definition Zones in the project.
+
+## Exact Spec
+
+`-[order-]exact-[target]` contains the exact contents of one Target.
+
+Exact Spec contains no ISM directives. Target content must exactly match the Exact Spec.
+
+At most one Exact Spec may map to a Target across all Definition Zones in the project.
+
+## Target Spec Set
+
+Semantic and Exact Spec for the same Target form its **Target Spec Set** and may coexist. They must be compatible; contradiction is a Collision.
+
+A Spec makes its Target managed. Removing the last Spec makes an existing file unmanaged and does not by itself authorize deletion.
+
+`@ABSENT` in a Semantic Spec means the Target must not exist. Such a Spec is incompatible with an Exact Spec.
