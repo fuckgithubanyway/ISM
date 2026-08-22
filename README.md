@@ -2,15 +2,11 @@
 
 **Code is transient. Intent is permanent.**
 
-ISM is a spec-driven development methodology architected for the AI-native era. It shifts the developer's focus from writing source code to defining strict specifications. By maintaining **structural isomorphism** between the "Definition Zone" and the project artifacts, ISM enables precise control over AI agents, treating the implementation as a disposable projection of your architectural intent.
+ISM is a specification-driven methodology for AI-assisted software development. Specifications are the source of truth; managed implementation artifacts are their replaceable projection.
 
+## Languages
 
-## 🌍 Languages / Языки
+- [Русский](./ru/README.md) — canonical normative text
+- [English](./en/README.md) — translation
 
-*   [🇷🇺 **Русский**](./ru/README.md)
-*   [🇺🇸 **English**](./en/README.md)
-
----
-
-*License: [WTFPL](../LICENSE)*
-
+License: [WTFPL](./LICENSE)
