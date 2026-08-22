@@ -1,172 +1,113 @@
 #!/usr/bin/env sh
 
-version="0.9"
+version="1.0"
 
 usage() {
-  cat << EOF
-ISM Snapshot — генератор единого текстового снимка директории.
+  cat << EOF2
+ISM Snapshot — единый текстовый снимок директории.
 Версия: $version
 
 Использование: $(basename "$0") [ОПЦИИ] [директория]
 
 Опции:
-  --all                  Включать скрытые файлы и директории (начинающиеся с '.')
-  --exclude PATTERN      Исключить по шаблону (можно указывать несколько раз)
-  --output FILE          Записать снимок в файл вместо stdout
-  --help                 Показать эту справку
-  --version              Показать версию
+  --all                Включать скрытые файлы и директории
+  --exclude PATTERN    Исключить по shell-шаблону; можно повторять
+  --output FILE        Записать снимок в файл
+  --help               Показать справку
+  --version            Показать версию
 
-Примеры:
-  ism-snapshot .
-  ism-snapshot --all --exclude .git --exclude node_modules ./myproject
-  ism-snapshot --output snapshot.txt .
-EOF
+Символические ссылки отображаются, но не разыменовываются.
+EOF2
 }
 
-fail() {
-  printf '%s\n\n' "ОШИБКА: $1" >&2
-  usage
-  exit 1
-}
+fail() { printf 'ОШИБКА: %s\n\n' "$1" >&2; usage >&2; exit 1; }
+print_header() { printf '%s\n' "---- ISM: $1 ----"; }
 
 is_binary_file() {
-  _f="$1"
-  [ ! -f "$_f" ] && return 1
-
-  if command -v od >/dev/null 2>&1; then
-    od -An -tx1 -N 1024 -- "$_f" 2>/dev/null | grep -q ' 00'
-  else
-    head -c 1024 -- "$_f" 2>/dev/null | grep -q "$(printf '\000')"
-  fi
+  [ ! -f "$1" ] && return 1
+  od -An -tx1 -N 1024 -- "$1" 2>/dev/null | grep -q ' 00'
 }
 
-# Размер с единицей измерения
 get_file_size() {
-  _size=$(ls -lh -- "$1" 2>/dev/null | awk '{print $5}')
-  case "$_size" in
-    *[!0-9.]*) printf '%s' "$_size" ;;   # уже есть K/M/G/T
-    *)         printf '%sB' "$_size" ;;  # только число → добавляем B
-  esac
+  wc -c < "$1" 2>/dev/null | tr -d ' '
 }
-
-# Получаем описание файла (только если утилита file доступна)
-get_file_description() {
-  if command -v file >/dev/null 2>&1; then
-    file -b -- "$1" 2>/dev/null | sed 's/^ *//'
-  fi
-}
-
-print_header() {
-  printf '%s\n' "---- ISM: $1 ----"
-}
-
-# ====================== MAIN ======================
 
 show_hidden=false
 output_file=""
 exclude_patterns=""
 target_dir="."
+target_set=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --all)           show_hidden=true; shift ;;
-    --exclude)
-      [ $# -lt 2 ] || [ -z "$2" ] && fail "--exclude требует аргумент PATTERN"
-      exclude_patterns="${exclude_patterns:+$exclude_patterns }$2"
-      shift 2
-      ;;
-    --output)
-      [ $# -lt 2 ] || [ -z "$2" ] && fail "--output требует аргумент FILE"
-      output_file="$2"
-      shift 2
-      ;;
-    --help)          usage; exit 0 ;;
-    --version)       printf '%s\n' "ism-snapshot $version"; exit 0 ;;
-    -*)              fail "Неизвестная опция '$1'. Используйте только длинные опции." ;;
-    *)
-      [ "$target_dir" != "." ] && fail "Можно указать только одну директорию"
-      target_dir="$1"
-      shift
-      ;;
+    --all) show_hidden=true; shift ;;
+    --exclude) [ $# -lt 2 ] && fail '--exclude требует PATTERN'; exclude_patterns="${exclude_patterns:+$exclude_patterns }$2"; shift 2 ;;
+    --output) [ $# -lt 2 ] && fail '--output требует FILE'; output_file="$2"; shift 2 ;;
+    --help) usage; exit 0 ;;
+    --version) printf 'ism-snapshot %s\n' "$version"; exit 0 ;;
+    -*) fail "Неизвестная опция '$1'" ;;
+    *) [ "$target_set" = true ] && fail 'Можно указать только одну директорию'; target_dir="$1"; target_set=true; shift ;;
   esac
 done
 
 [ ! -d "$target_dir" ] && fail "Директория '$target_dir' не найдена"
+[ -L "$target_dir" ] && fail 'Корневая директория не может быть символической ссылкой'
 
-SCRIPT_DIR=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ISM_TREE="$SCRIPT_DIR/ism-tree"
 [ ! -x "$ISM_TREE" ] && fail "ism-tree не найден в $SCRIPT_DIR"
 
-T_TREE="${TMPDIR:-/tmp}/ism_snap_tree_$$"
-
+T_TREE="${TMPDIR:-/tmp}/ism_snapshot_tree_$$"
 cleanup() { rm -f "$T_TREE" 2>/dev/null; }
-trap cleanup EXIT
+trap cleanup EXIT HUP INT TERM
 
-# Генерация структуры
 (
-  cd -- "$target_dir" || fail "Не удалось перейти в директорию"
+  cd -- "$target_dir" || exit 1
   set -- --plain
   [ "$show_hidden" = true ] && set -- "$@" --all
-
-  for pat in $exclude_patterns; do
-    set -- "$@" --exclude "$pat"
-  done
-
-  set -- "$@" "."
+  for pat in $exclude_patterns; do set -- "$@" --exclude "$pat"; done
+  set -- "$@" .
   exec "$ISM_TREE" "$@"
-) > "$T_TREE" || fail "Ошибка генерации структуры"
+) > "$T_TREE" || fail 'Ошибка генерации структуры'
 
 generate_snapshot() {
-  print_header "SNAPSHOT BEGIN"
-  printf 'Директория: %s\n' "$(cd -- "$target_dir" && pwd)"
-  printf 'Дата: %s\n\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date '+%Y-%m-%d %H:%M:%S')"
+  print_header 'SNAPSHOT BEGIN'
+  printf 'Root: .\n'
+  printf 'Tool: ism-snapshot %s\n' "$version"
+  printf 'Hidden: %s\n' "$show_hidden"
+  printf 'Exclude: %s\n\n' "${exclude_patterns:-(none)}"
 
-  print_header "PROJECT STRUCTURE"
+  print_header 'PROJECT STRUCTURE'
   cat "$T_TREE"
   printf '\n'
 
-  tail -n +2 "$T_TREE" 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
+  tail -n +2 "$T_TREE" | while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-      */)       continue ;;
+      */) continue ;;
       *' -> '*) continue ;;
-      *)
-        rel_path="$line"
-        full_path="$target_dir/$rel_path"
-
-        if [ -f "$full_path" ]; then
-          file_size=$(get_file_size "$full_path")
-
-          if [ ! -s "$full_path" ]; then
-            printf '%s\n\n' "---- ISM: EMPTY FILE $rel_path (size: 0B) ----"
-
-          elif is_binary_file "$full_path"; then
-            printf '%s\n' "---- ISM: BINARY FILE $rel_path (size: $file_size) ----"
-            
-            file_desc=$(get_file_description "$full_path")
-            if [ -n "$file_desc" ]; then
-              printf '%s\n' "$file_desc"
-            fi
-            printf '\n\n'
-
-          else
-            printf '%s\n' "---- ISM: CONTENT OF $rel_path (size: $file_size) ----"
-            cat -- "$full_path"
-            printf '\n\n'
-          fi
-        fi
-        ;;
     esac
+
+    full="$target_dir/$line"
+    [ ! -f "$full" ] && continue
+    size=$(get_file_size "$full")
+
+    if [ ! -s "$full" ]; then
+      printf '%s\n\n' "---- ISM: EMPTY FILE $line (bytes: 0) ----"
+    elif is_binary_file "$full"; then
+      printf '%s\n\n' "---- ISM: BINARY FILE $line (bytes: $size) ----"
+    else
+      printf '%s\n' "---- ISM: FILE BEGIN $line (bytes: $size) ----"
+      cat -- "$full"
+      printf '\n%s\n\n' "---- ISM: FILE END $line ----"
+    fi
   done
 
-  print_header "SNAPSHOT END"
+  print_header 'SNAPSHOT END'
 }
 
 if [ -n "$output_file" ]; then
-  if generate_snapshot > "$output_file"; then
-    printf 'Снимок успешно сохранён: %s\n' "$output_file" >&2
-  else
-    fail "Не удалось записать в $output_file"
-  fi
+  generate_snapshot > "$output_file" || fail "Не удалось записать $output_file"
+  printf 'Снимок сохранён: %s\n' "$output_file" >&2
 else
   generate_snapshot
 fi
