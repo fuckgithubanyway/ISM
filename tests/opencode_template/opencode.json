@@ -1,8 +1,8 @@
 {
   "instructions": [
-    "ism/-0-manifest-core.md",
-    "ism/-1-manifest-topology.md",
-    "ism/-2-manifest-workflow.md",
-    "ism/-3-manifest-adr.md"
+    "ism/--manifest-core.md",
+    "ism/--manifest-topology.md",
+    "ism/--manifest-workflow.md",
+    "ism/--manifest-adr.md"
   ]
 }

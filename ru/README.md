@@ -1,4 +1,4 @@
-# Isomorphic Specification Methodology (ISM) 0.7
+# Isomorphic Specification Methodology (ISM) 0.8
 
 ISM — spec-driven методология разработки для работы человека и AI-агента.
 
@@ -12,16 +12,17 @@ ISM — spec-driven методология разработки для рабо�
 - Meta задаёт правила области, но не создаёт Target.
 - Projection является результатом и может быть восстановлена для Managed Target.
 - `order` управляет порядком контекста, но не приоритетом правил.
+- Manifest не имеет `order` и всегда отображается первым.
 
 ## Структура
 
 ```text
 [root]/
 ├── ism/
-│   ├── -0-manifest-core.md
-│   ├── -1-manifest-topology.md
-│   ├── -2-manifest-workflow.md
-│   ├── -3-manifest-adr.md
+│   ├── --manifest-core.md
+│   ├── --manifest-topology.md
+│   ├── --manifest-workflow.md
+│   ├── --manifest-adr.md
 │   └── -meta-project.md
 │
 ├── backend/

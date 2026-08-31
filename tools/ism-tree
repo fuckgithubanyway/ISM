@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 
-version="1.0"
+version="1.1"
 
 usage() {
   cat << EOF2
@@ -16,7 +16,8 @@ ISM Tree — генератор структуры каталогов.
   --help               Показать справку
   --version            Показать версию
 
-ISM-файлы с префиксом -<order>- сортируются по числовому order.
+ISM-файлы с префиксом --manifest- идут первыми в лексикографическом порядке;
+остальные ISM-файлы с префиксом -<order>- сортируются по числовому order.
 Символические ссылки отображаются, но не обходятся.
 EOF2
 }
@@ -33,11 +34,13 @@ sort_items() {
   awk '
   {
     path=$0; name=path; sub(/^.*\//,"",name)
-    if (match(name,/^-[0-9]+-/)) {
+    if (name ~ /^--manifest-/) {
+      printf "0:%s\t%s\n", name, path
+    } else if (match(name,/^-[0-9]+-/)) {
       ord=substr(name,2,RLENGTH-2)+0
-      printf "0:%020d:%s\t%s\n", ord, name, path
+      printf "1:%020d:%s\t%s\n", ord, name, path
     } else {
-      printf "1:%s\t%s\n", name, path
+      printf "2:%s\t%s\n", name, path
     }
   }' | LC_ALL=C sort | cut -f2-
 }

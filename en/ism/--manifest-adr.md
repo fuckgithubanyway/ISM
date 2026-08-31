@@ -1,6 +1,6 @@
 # ISM Manifest: ADR
 
-**Version:** 0.7  
+**Version:** 0.8  
 **Status:** Translation of the canonical Russian normative text
 
 ## Purpose

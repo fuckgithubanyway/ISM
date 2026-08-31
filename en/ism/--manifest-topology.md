@@ -1,6 +1,6 @@
 # ISM Manifest: Topology
 
-**Version:** 0.7  
+**Version:** 0.8  
 **Status:** Translation of the canonical Russian normative text
 
 ## Names
@@ -8,7 +8,7 @@
 ISM file forms:
 
 ```text
--[order-]manifest-[name].md
+--manifest-[name].md
 -[order-]meta-[name].md
 -[order-]spec-[target].md
 -[order-]exact-[target]
@@ -18,9 +18,9 @@ ISM file forms:
 
 Canonical order inside a directory:
 
-1. files with `order`, by numeric `order`;
-2. then files without `order`;
-3. ties by filename.
+1. `--manifest-[name].md`, lexicographically by filename;
+2. files with `order`, by numeric `order`;
+3. files without `order`, by filename.
 
 `target` is the full Target filename including its extension.
 
@@ -52,6 +52,8 @@ Symbolic links never extend ISM scope beyond Project Root and must not be used t
 ## Manifest
 
 Manifest files are allowed only directly in the Root Definition Zone.
+
+Manifest has no `order`. Under canonical display, the Manifest Set always precedes Meta and Spec. The canonical Manifest order is lexicographic by filename and carries no semantics.
 
 All `manifest` files form the **Manifest Set**. Their count is unrestricted. Together they define the project's ISM protocol.
 

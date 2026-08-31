@@ -1,6 +1,6 @@
 # ISM Manifest: Workflow
 
-**Version:** 0.7  
+**Version:** 0.8  
 **Status:** Translation of the canonical Russian normative text
 
 ## Target Context
@@ -11,7 +11,7 @@ ISM-Agent resolves Target context in this order:
 2. applicable Meta Sets, from general scope to specific scope;
 3. Target Spec Set.
 
-Files inside each Set follow canonical `order` from Topology.
+Files inside each Meta Set and Target Spec Set follow canonical `order` from Topology. Order inside the Manifest Set does not affect context resolution.
 
 Rule priority:
 
