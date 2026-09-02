@@ -1,0 +1,1 @@
+../../../ru/ism/-20-manifest-workflow.md

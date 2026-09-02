@@ -1,4 +1,4 @@
-# Isomorphic Specification Methodology (ISM) 0.8
+# Isomorphic Specification Methodology (ISM) 0.9
 
 ISM — spec-driven методология разработки для работы человека и AI-агента.
 
@@ -8,29 +8,29 @@ ISM — spec-driven методология разработки для рабо�
 ## Модель
 
 - `ism/` хранит Definition.
-- Spec делает конкретный Target управляемым.
-- Meta задаёт правила области, но не создаёт Target.
-- Projection является результатом и может быть восстановлена для Managed Target.
-- `order` управляет порядком контекста, но не приоритетом правил.
-- Manifest не имеет `order` и всегда отображается первым.
+- Spec определяет конкретный Target.
+- Meta задаёт правила области, но не определяет Target.
+- Manifest задаёт протокол ISM проекта.
+- Exact задаёт точное содержимое Target.
+- `order` управляет только порядком файлов.
 
 ## Структура
 
 ```text
 [root]/
 ├── ism/
-│   ├── --manifest-core.md
-│   ├── --manifest-topology.md
-│   ├── --manifest-workflow.md
-│   ├── --manifest-adr.md
-│   └── -meta-project.md
+│   ├── -00-manifest-core.md
+│   ├── -10-manifest-topology.md
+│   ├── -20-manifest-workflow.md
+│   ├── -30-manifest-adr.md
+│   └── -40-meta-project.md
 │
 ├── backend/
 │   ├── ism/
-│   │   ├── -0-meta-typescript.md
+│   │   ├── -10-meta-typescript.md
 │   │   └── src/
-│   │       ├── -10-spec-api.ts.md
-│   │       └── -20-exact-schema.json
+│   │       ├── -20-spec-api.ts.md
+│   │       └── -30-exact-schema.json
 │   └── src/
 │       ├── api.ts
 │       └── schema.json
@@ -38,13 +38,14 @@ ISM — spec-driven методология разработки для рабо�
 └── README.md
 ```
 
-`backend/ism/src/-10-spec-api.ts.md` определяет `backend/src/api.ts`.
+`backend/ism/src/-20-spec-api.ts.md` определяет `backend/src/api.ts`.
 
-В проекте может быть несколько Definition Zone `<scope>/ism/`. Manifest Set находится только в `[root]/ism/` и действует на весь проект.
+В проекте может быть несколько `<scope>/ism/` Definition Zone. Manifest Set находится только в `[root]/ism/` и действует на весь проект.
 
-## Спецификации
+## Формы файлов
 
 ```text
+-[order-]manifest-[name].md
 -[order-]meta-[name].md
 -[order-]spec-[target].md
 -[order-]exact-[target]
@@ -61,6 +62,6 @@ Semantic Spec описывает требуемый смысл. Exact Spec за�
 
 ## Принцип записи
 
-Пиши минимально достаточный текст. Не повторяй известное. Сохраняй всю информацию, необходимую для однозначного результата.
+Используй минимальный текст, достаточный для однозначного смысла. Не повторяй известное.
 
 Подробные правила находятся в [`ism/`](./ism/).

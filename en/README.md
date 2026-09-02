@@ -1,4 +1,4 @@
-# Isomorphic Specification Methodology (ISM) 0.8
+# Isomorphic Specification Methodology (ISM) 0.9
 
 ISM is a specification-driven methodology for human and AI-agent software development.
 
@@ -8,29 +8,29 @@ ISM is a specification-driven methodology for human and AI-agent software develo
 ## Model
 
 - `ism/` stores Definition.
-- A Spec makes a specific Target managed.
-- Meta defines scope rules but never creates a Target.
-- Projection is output and Managed Targets must be recoverable.
-- `order` controls context order, not rule priority.
-- Manifest has no `order` and is always displayed first.
+- Spec defines a specific Target.
+- Meta defines scope rules but does not define a Target.
+- Manifest defines the project's ISM protocol.
+- Exact defines exact Target content.
+- `order` controls file order only.
 
 ## Structure
 
 ```text
 [root]/
 ├── ism/
-│   ├── --manifest-core.md
-│   ├── --manifest-topology.md
-│   ├── --manifest-workflow.md
-│   ├── --manifest-adr.md
-│   └── -meta-project.md
+│   ├── -00-manifest-core.md
+│   ├── -10-manifest-topology.md
+│   ├── -20-manifest-workflow.md
+│   ├── -30-manifest-adr.md
+│   └── -40-meta-project.md
 │
 ├── backend/
 │   ├── ism/
-│   │   ├── -0-meta-typescript.md
+│   │   ├── -10-meta-typescript.md
 │   │   └── src/
-│   │       ├── -10-spec-api.ts.md
-│   │       └── -20-exact-schema.json
+│   │       ├── -20-spec-api.ts.md
+│   │       └── -30-exact-schema.json
 │   └── src/
 │       ├── api.ts
 │       └── schema.json
@@ -38,13 +38,14 @@ ISM is a specification-driven methodology for human and AI-agent software develo
 └── README.md
 ```
 
-`backend/ism/src/-10-spec-api.ts.md` defines `backend/src/api.ts`.
+`backend/ism/src/-20-spec-api.ts.md` defines `backend/src/api.ts`.
 
 A project may contain multiple `<scope>/ism/` Definition Zones. The Manifest Set exists only in `[root]/ism/` and applies project-wide.
 
-## Specifications
+## File forms
 
 ```text
+-[order-]manifest-[name].md
 -[order-]meta-[name].md
 -[order-]spec-[target].md
 -[order-]exact-[target]
@@ -59,8 +60,8 @@ Semantic Spec defines required meaning. Exact Spec defines exact Target content.
 - **Verification** — inspect Drift without changes.
 - **Reconciliation** — Projection → proposed Definition change.
 
-## Writing Principle
+## Writing principle
 
-Use the shortest text that preserves all required meaning. Do not restate known context.
+Use the shortest text sufficient for unambiguous meaning. Do not restate known context.
 
 Detailed rules are in [`ism/`](./ism/).

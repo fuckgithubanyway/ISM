@@ -1,0 +1,1 @@
+../../../ru/ism/-00-manifest-core.md

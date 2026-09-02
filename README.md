@@ -2,7 +2,7 @@
 
 **Code is transient. Intent is permanent.**
 
-ISM is a specification-driven methodology for AI-assisted software development. Specifications are the source of truth; managed implementation artifacts are their replaceable projection.
+ISM is a specification-driven methodology for human and AI-agent software development. Definition is the source of truth; Target artifacts are its replaceable Projection.
 
 ## Languages
 
