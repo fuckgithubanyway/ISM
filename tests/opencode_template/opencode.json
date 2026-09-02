@@ -1,8 +1,6 @@
 {
+  "$schema": "https://opencode.ai/config.json",
   "instructions": [
-    "ism/--manifest-core.md",
-    "ism/--manifest-topology.md",
-    "ism/--manifest-workflow.md",
-    "ism/--manifest-adr.md"
+    "ism/-*manifest-*.md"
   ]
 }
