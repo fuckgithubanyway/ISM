@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 
-version="1.0"
+version="1.1"
 
 usage() {
   cat << EOF2
@@ -28,9 +28,7 @@ is_binary_file() {
   od -An -tx1 -N 1024 -- "$1" 2>/dev/null | grep -q ' 00'
 }
 
-get_file_size() {
-  wc -c < "$1" 2>/dev/null | tr -d ' '
-}
+get_file_size() { wc -c < "$1" 2>/dev/null | tr -d ' '; }
 
 show_hidden=false
 output_file=""

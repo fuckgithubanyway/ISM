@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 
-version="1.1"
+version="1.2"
 
 usage() {
   cat << EOF2
@@ -16,9 +16,8 @@ ISM Tree — генератор структуры каталогов.
   --help               Показать справку
   --version            Показать версию
 
-ISM-файлы с префиксом --manifest- идут первыми в лексикографическом порядке;
-остальные ISM-файлы с префиксом -<order>- сортируются по числовому order.
-Символические ссылки отображаются, но не обходятся.
+В Definition Zone ISM-файлы с -<order>- сортируются по числовому order;
+остальные элементы сортируются по имени. Символические ссылки не обходятся.
 EOF2
 }
 
@@ -31,16 +30,15 @@ get_link_target() {
 }
 
 sort_items() {
-  awk '
+  _in_definition="$1"
+  awk -v ism="$_in_definition" '
   {
     path=$0; name=path; sub(/^.*\//,"",name)
-    if (name ~ /^--manifest-/) {
-      printf "0:%s\t%s\n", name, path
-    } else if (match(name,/^-[0-9]+-/)) {
-      ord=substr(name,2,RLENGTH-2)+0
-      printf "1:%020d:%s\t%s\n", ord, name, path
+    if (ism == "true" && match(name,/^-[0-9]+-(manifest|meta|spec|exact)-/)) {
+      ord=substr(name,2,index(substr(name,2),"-")-1)+0
+      printf "0:%020d:%s\t%s\n", ord, name, path
     } else {
-      printf "2:%s\t%s\n", name, path
+      printf "1:%s\t%s\n", name, path
     }
   }' | LC_ALL=C sort | cut -f2-
 }
@@ -57,12 +55,12 @@ excluded() (
 )
 
 process_dir() (
-  _path="$1"; _prefix="$2"; _rel="$3"
+  _path="$1"; _prefix="$2"; _rel="$3"; _in_definition="$4"
 
   if [ "$show_hidden" = true ]; then
-    _items=$(find "$_path" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort_items)
+    _items=$(find "$_path" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort_items "$_in_definition")
   else
-    _items=$(find "$_path" -mindepth 1 -maxdepth 1 ! -name '.*' -print 2>/dev/null | sort_items)
+    _items=$(find "$_path" -mindepth 1 -maxdepth 1 ! -name '.*' -print 2>/dev/null | sort_items "$_in_definition")
   fi
 
   _filtered=""
@@ -108,7 +106,9 @@ EOF2
 
     if [ "$_is_dir" = true ] && [ "$_is_link" = false ]; then
       [ "$plain_mode" = true ] && _next_prefix=""
-      process_dir "$_full" "$_next_prefix" "$_current_rel"
+      _next_in_definition="$_in_definition"
+      [ "$_name" = "ism" ] && _next_in_definition=true
+      process_dir "$_full" "$_next_prefix" "$_current_rel" "$_next_in_definition"
     fi
   done << EOF2
 $_filtered
@@ -137,4 +137,7 @@ done
 [ -L "$target" ] && fail 'Корневая директория не может быть символической ссылкой'
 
 if [ "$plain_mode" = true ]; then printf '.\n'; else printf '%s\n' "${target%/}"; fi
-[ -d "$target" ] && process_dir "${target%/}" "" ""
+
+_in_definition=false
+[ "$(basename -- "${target%/}")" = "ism" ] && _in_definition=true
+[ -d "$target" ] && process_dir "${target%/}" "" "" "$_in_definition"
